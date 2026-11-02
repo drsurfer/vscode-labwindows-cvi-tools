@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Sfondo color ottanio con angolo in alto a destra arrotondato -->
+  <path d="M 0 0 H 80 A 48 48 0 0 1 128 48 V 128 H 0 Z" fill="#0CB2B2" />
+  
+  <!-- Parentesi quadra sinistra -->
+  <path d="M 32 32 H 60 V 48 H 48 V 80 H 60 V 96 H 32 Z" fill="#FFFFFF" />
+  
+  <!-- Parentesi quadra destra -->
+  <path d="M 96 32 H 68 V 48 H 80 V 80 H 68 V 96 H 96 Z" fill="#FFFFFF" />
+</svg>

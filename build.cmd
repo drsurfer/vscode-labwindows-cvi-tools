@@ -1,68 +1,82 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-set EXTENSION_VSIX=labwindows-cvi-tools-0.0.0.vsix
+:: Ensure working directory is the script directory
+cd /d "%~dp0"
 
 echo ========================================================
-echo   LabWindows/CVI Tools - Build, Package e Install
+echo   LabWindows/CVI Tools - Build, Package and Install
 echo ========================================================
 echo.
-echo Directory di lavoro corrente: %CD%
+echo Working directory: %CD%
 echo.
 
-:: Controllo di sicurezza: verifica che ci troviamo nella cartella del progetto
+:: Safety check: ensure package.json exists in current folder
 if not exist "package.json" (
-    echo [ERRORE] package.json non trovato in %CD%.
-    echo Assicurati di lanciare lo script posizionandoti dentro la cartella del progetto:
-    echo cd percorso\del\progetto
-    echo build.cmd
+    echo [ERROR] package.json not found in %CD%.
+    echo Please run this script from the project root directory.
     goto :error
 )
 
-:: -----------------------------------------------------------
-:: STEP 1: COMPILAZIONE E PACKAGING (gestito da vsce)
-:: -----------------------------------------------------------
-echo [STEP 1/2] Compilazione TypeScript e creazione pacchetto VSIX (%EXTENSION_VSIX%)...
+:: Extract package name and version dynamically from package.json
+for /f "delims=" %%i in ('node -p "require('./package.json').version" 2^>nul') do set "VERSION=%%i"
+for /f "delims=" %%i in ('node -p "require('./package.json').name" 2^>nul') do set "PACKAGE_NAME=%%i"
 
-call npx vsce package
+if "%VERSION%"=="" (
+    echo [ERROR] Unable to extract version from package.json.
+    goto :error
+)
+if "%PACKAGE_NAME%"=="" (
+    echo [ERROR] Unable to extract package name from package.json.
+    goto :error
+)
+
+set "EXTENSION_VSIX=%PACKAGE_NAME%-%VERSION%.vsix"
+echo Target package: %EXTENSION_VSIX% (Version: %VERSION%)
+echo.
+
+:: -----------------------------------------------------------
+:: STEP 1: COMPILATION AND PACKAGING (managed by vsce)
+:: -----------------------------------------------------------
+echo [STEP 1/2] Compiling TypeScript and creating VSIX package (%EXTENSION_VSIX%)...
+
+call npx vsce package --no-git-tag-version
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [ERRORE] Creazione pacchetto VSIX fallita. Operazione interrotta.
+    echo [ERROR] VSIX packaging failed with exit code %ERRORLEVEL%. Aborting.
     goto :error
 )
- 
+
 if not exist "%EXTENSION_VSIX%" (
     echo.
-    echo [ERRORE] File %EXTENSION_VSIX% non trovato dopo il packaging.
+    echo [ERROR] Expected package file %EXTENSION_VSIX% was not found after packaging.
     goto :error
 )
-echo [OK] Pacchetto %EXTENSION_VSIX% generato con successo.
+echo [OK] Package %EXTENSION_VSIX% generated successfully.
 echo.
 
 :: -----------------------------------------------------------
-:: STEP 2: INSTALLAZIONE IN VS CODE
+:: STEP 2: INSTALLATION IN VS CODE
 :: -----------------------------------------------------------
-echo [STEP 2/2] Installazione dell'estensione in VS Code...
-pause
+echo [STEP 2/2] Installing extension in VS Code...
 
 call code --install-extension "%EXTENSION_VSIX%" --force
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [ERRORE] Installazione in VS Code fallita.
+    echo [ERROR] Installation into VS Code failed with exit code %ERRORLEVEL%.
     goto :error
 )
-echo [OK] Estensione installata correttamente in VS Code!
+echo [OK] Extension installed successfully in VS Code!
 echo.
 echo ========================================================
-echo Processo completato con successo.
-echo Ricarica la finestra in VS Code (Ctrl+Shift+P - Developer: Reload Window).
+echo Build and installation completed successfully.
+echo Reload window in VS Code (Ctrl+Shift+P -^> Developer: Reload Window).
 echo ========================================================
 exit /b 0
 
 :error
 echo.
 echo ========================================================
-echo Si e' verificato un errore durante la procedura.
+echo An error occurred during the build/install process.
 echo ========================================================
-pause
 exit /b 1

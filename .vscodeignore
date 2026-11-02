@@ -9,3 +9,5 @@ scripts/**
 
 test-mocks/**
 *.bak
+media/work/**
+media/jc/**

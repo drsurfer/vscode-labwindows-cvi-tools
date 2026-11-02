@@ -360,6 +360,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     fileSymbolsProvider.setSelectedFile(activeEditor.document.uri.fsPath);
   }
   updateStatusBar();
+
+  const showOnStartup = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showHomeOnStartup', true);
+  if (showOnStartup) {
+    home.show();
+  }
 }
 
 function createStatusBarAction(text: string, tooltip: string, command: string, priority: number): vscode.StatusBarItem {

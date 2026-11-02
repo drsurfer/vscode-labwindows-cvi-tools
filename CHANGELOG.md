@@ -2,6 +2,26 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.1] - 2026-11-02
+
+### Added
+- **Native Debugging Architecture Guide**: Added comprehensive documentation in `NATIVE_DEBUGGING.md` detailing the DWARF 4 pipeline, PE/COFF section name resolution, and native GDB vs. MSVC CodeView PDB integration.
+- **Custom Branding Assets**:
+  - Dedicated monochromatic Activity Bar / sidebar icon (`media/cvi-tools.svg`).
+  - Full-color Home Page hero and header branding icon (`media/cvi-tools-hero.svg`) with optional light/dark variant support.
+
+### Changed
+- **Home Page UX/UI Redesign**:
+  - Replaced hardcoded inline SVG with dynamic file-based icon loading from `media/`.
+  - Removed button background from top header title logo.
+  - Relocated GitHub repository link to header-left alongside title logo.
+  - Removed circular frame and shadow around the main hero logo, scaling icon proportionally to 74x74 px.
+  - Added optional automatic home page display on VS Code startup (`labwindowsCvi.showHomeOnStartup`).
+- **Build & Packaging Automation**:
+  - Localized `build.cmd` to English.
+  - Removed interactive pauses and added immediate error aborts preventing failed installs.
+  - Automated package name and version resolution directly from `package.json`.
+
 ## [0.0.0] - 2026-10-30
 
 ### Initial Baseline Release

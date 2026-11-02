@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -32,7 +32,7 @@
         {
           "id": "labwindowsCvi",
           "title": "LabWindows/CVI",
-          "icon": "media/cvi.svg"
+          "icon": "media/cvi-tools.svg"
         }
       ]
     },
@@ -42,7 +42,7 @@
           "id": "labwindowsCvi.workspaceExplorer",
           "name": "CVI Workspace",
           "contextualTitle": "LabWindows/CVI",
-          "icon": "media/cvi.svg",
+          "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         },
         {
@@ -50,28 +50,28 @@
           "name": "CVI Actions",
           "contextualTitle": "CVI Actions",
           "visibility": "visible",
-          "icon": "media/cvi.svg",
+          "icon": "media/cvi-tools.svg",
           "showCollapseAll": false
         },
         {
           "id": "labwindowsCvi.debugControls",
           "name": "CVI Debug",
           "contextualTitle": "CVI Debug",
-          "icon": "media/cvi.svg",
+          "icon": "media/cvi-tools.svg",
           "showCollapseAll": false
         },
         {
           "id": "labwindowsCvi.fileSymbols",
           "name": "CVI File Symbols",
           "contextualTitle": "CVI File Symbols",
-          "icon": "media/cvi.svg",
+          "icon": "media/cvi-tools.svg",
           "showCollapseAll": false
         },
         {
           "id": "labwindowsCvi.libraryExplorer",
           "name": "CVI Libraries",
           "contextualTitle": "CVI Libraries",
-          "icon": "media/cvi.svg",
+          "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
       ]
@@ -1605,7 +1605,7 @@
       ]
     },
     "configuration": {
-      "title": "LabWindows/CVI Project Manager",
+      "title": "LabWindows/CVI Tools",
       "properties": {
         "labwindowsCvi.installations": {
           "type": "array",
@@ -1916,6 +1916,11 @@
           "type": "string",
           "default": "",
           "description": "Optional custom path to objcopy.exe used to enable DWARF debug symbols for GDB. If empty, discovered automatically."
+        },
+        "labwindowsCvi.showHomeOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the LabWindows/CVI Tools home page when VS Code starts up."
         }
       }
     },
