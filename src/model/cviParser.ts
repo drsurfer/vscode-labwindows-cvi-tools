@@ -3,6 +3,7 @@ import * as path from 'path';
 import { IniDocument, IniSection } from './iniDocument';
 import { CviBuildMode, CviProject, CviProjectFile, CviRunOptions, CviWorkspace, CviWorkspaceProjectRef } from './types';
 import { fromCviPath, normalizeRelativePath, quote, readCviTextFile, splitCviLongValue, toCviPath, toCviRuntimeStoragePath, unquote, writeCviTextFile } from '../utils/pathUtils';
+import { CviWarningLevel, formatWarningIdList, parseWarningIdList } from './cviWarningCatalog';
 
 
 export interface DebugLibrarySwitchResult {
@@ -87,6 +88,26 @@ export interface CviNativeTargetSettings {
   singleHeaderNiTypeInfoFile: string;
   versionInfo: CviVersionInfoSettings;
   signing: CviSigningSettings;
+}
+
+export interface CviBuildOptions {
+  callingConvention: string;
+  stackReserve: number;
+  stackCommit: number;
+  imageBaseAddress: string;
+  optimizationLevel: string;
+  profiling: string;
+  debuggingLevel: string;
+  detectUninitializedLocalsRuntime: boolean;
+  compilerDefines: string;
+  selectedWarningLevel: CviWarningLevel;
+  showWarningFlagsInBuildOutput: boolean;
+  enableC99: boolean;
+  enableOpenMP: boolean;
+  compileWithPrecompiledInclude: boolean;
+  precompiledIncludeFile: string;
+  disabledWarningIds: number[];
+  errorWarningIds: number[];
 }
 
 function readText(filePath: string): string {
@@ -898,6 +919,149 @@ export class CviParser {
     config.set('Sign URL', quote(settings.signing.descriptionUrl));
     setBoolean(signing, 'Sign Debug Build', settings.signing.signDebugBuild);
     writeText(projectPath, document.toString());
+  }
+
+  getNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode): CviBuildOptions {
+    const document = IniDocument.parse(readText(projectPath));
+    const config = getProjectModeSection(document, mode);
+
+    let debuggingLevel = 'Standard';
+    let profiling = 'Disabled';
+    let uninitializedLocals = true;
+    if (workspacePath && fs.existsSync(workspacePath) && path.extname(workspacePath).toLowerCase() === '.cws') {
+      try {
+        const cwsDoc = IniDocument.parse(readText(workspacePath));
+        const cwsHeader = cwsDoc.getSection('Workspace Header');
+        const projectCount = Number(cwsHeader?.get('Number of Projects') ?? '1');
+        let projectIndex = 1;
+        const normPrj = path.normalize(projectPath).toLowerCase();
+        for (let i = 1; i <= projectCount; i++) {
+          const key = `Project ${String(i).padStart(4, '0')}`;
+          const val = unquote(cwsHeader?.get(key));
+          if (val) {
+            const resolved = path.isAbsolute(val) ? val : path.resolve(path.dirname(workspacePath), val);
+            if (path.normalize(resolved).toLowerCase() === normPrj) {
+              projectIndex = i;
+              break;
+            }
+          }
+        }
+        const suffix = String(projectIndex).padStart(4, '0');
+        const cwsModeSection = cwsDoc.getSection(`Default Build Config ${suffix} ${modeSuffix(mode)}`);
+        if (cwsModeSection) {
+          debuggingLevel = unquote(cwsModeSection.get('Debugging Level')) ?? debuggingLevel;
+          profiling = unquote(cwsModeSection.get('Profile')) ?? profiling;
+          uninitializedLocals = parseBoolean(cwsModeSection.get('Enable Uninitialized Locals Runtime Warning'), uninitializedLocals);
+        }
+      } catch { /* ignore cws parsing error */ }
+    }
+
+    const is64 = mode.endsWith('64');
+    const rawBaseAddr = unquote(config.get(is64 ? 'Image Base Address x64' : 'Image Base Address'))
+      ?? unquote(config.get('Image Base Address'))
+      ?? '4194304';
+    const numBaseAddr = Number(rawBaseAddr);
+    const hexBaseAddr = !isNaN(numBaseAddr) ? '0x' + numBaseAddr.toString(16).padStart(is64 ? 16 : 8, '0') : rawBaseAddr;
+
+    const selectedLevel = (unquote(config.get('Selected Warning Level')) ?? 'Common') as CviWarningLevel;
+    const warningListStr = unquote(config.get(`Warning List ${selectedLevel}`)) ?? '';
+    const errorListStr = unquote(config.get(`Error List ${selectedLevel}`)) ?? '';
+
+    const disabledWarningIds = parseWarningIdList(warningListStr).map((n) => Math.abs(n));
+    const errorWarningIds = parseWarningIdList(errorListStr).filter((n) => n > 0);
+
+    return {
+      callingConvention: unquote(config.get('Default Calling Convention')) ?? 'cdecl',
+      stackReserve: Number(config.get('Stack Reserve') ?? config.get('Stack Size') ?? '1048576'),
+      stackCommit: Number(config.get('Stack Commit') ?? '4096'),
+      imageBaseAddress: hexBaseAddr,
+      optimizationLevel: unquote(config.get('Optimization Level')) ?? 'Optimize for speed (level 2)',
+      profiling,
+      debuggingLevel,
+      detectUninitializedLocalsRuntime: uninitializedLocals,
+      compilerDefines: unquote(config.get('Compiler Defines')) ?? '',
+      selectedWarningLevel: selectedLevel,
+      showWarningFlagsInBuildOutput: parseBoolean(config.get('Show Warning IDs in Build Output')),
+      enableC99: parseBoolean(config.get('Enable C99 Extensions'), true),
+      enableOpenMP: parseBoolean(config.get('Enable OpenMP Extensions')),
+      compileWithPrecompiledInclude: parseBoolean(config.get('Compile with Precompiled Include File')),
+      precompiledIncludeFile: resolveStoredPath(config, 'Precompiled Include File'),
+      disabledWarningIds,
+      errorWarningIds
+    };
+  }
+
+  setNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode, options: CviBuildOptions): void {
+    const document = IniDocument.parse(readText(projectPath));
+    const config = getProjectModeSection(document, mode);
+
+    const is64 = mode.endsWith('64');
+    config.set('Default Calling Convention', quote(options.callingConvention));
+    config.set('Stack Reserve', String(options.stackReserve));
+    config.set('Stack Commit', String(options.stackCommit));
+    if (!config.has('Stack Size')) {
+      config.set('Stack Size', String(options.stackReserve));
+    }
+
+    let baseAddrNum = 4194304;
+    const trimmedAddr = options.imageBaseAddress.trim();
+    if (trimmedAddr.startsWith('0x') || trimmedAddr.startsWith('0X')) {
+      baseAddrNum = parseInt(trimmedAddr, 16);
+    } else {
+      baseAddrNum = parseInt(trimmedAddr, 10);
+    }
+    if (isNaN(baseAddrNum)) {
+      baseAddrNum = 4194304;
+    }
+    config.set(is64 ? 'Image Base Address x64' : 'Image Base Address', String(baseAddrNum));
+    if (!is64 && !config.has('Image Base Address x64')) {
+      config.set('Image Base Address x64', String(baseAddrNum));
+    }
+
+    config.set('Optimization Level', quote(options.optimizationLevel));
+    config.set('Compiler Defines', quote(options.compilerDefines));
+    setBoolean(config, 'Enable C99 Extensions', options.enableC99);
+    setBoolean(config, 'Enable OpenMP Extensions', options.enableOpenMP);
+    setBoolean(config, 'Show Warning IDs in Build Output', options.showWarningFlagsInBuildOutput);
+    config.set('Selected Warning Level', quote(options.selectedWarningLevel));
+
+    const negDisabled = options.disabledWarningIds.map((id) => -Math.abs(id));
+    const posErrors = options.errorWarningIds.map((id) => Math.abs(id));
+    config.set(`Warning List ${options.selectedWarningLevel}`, quote(formatWarningIdList(negDisabled)));
+    config.set(`Error List ${options.selectedWarningLevel}`, quote(formatWarningIdList(posErrors)));
+
+    setBoolean(config, 'Compile with Precompiled Include File', options.compileWithPrecompiledInclude);
+    setProjectReferencedPath(config, 'Precompiled Include File', projectPath, options.precompiledIncludeFile);
+
+    writeText(projectPath, document.toString());
+
+    if (workspacePath && fs.existsSync(workspacePath) && path.extname(workspacePath).toLowerCase() === '.cws') {
+      try {
+        const cwsDoc = IniDocument.parse(readText(workspacePath));
+        const cwsHeader = cwsDoc.getSection('Workspace Header');
+        const projectCount = Number(cwsHeader?.get('Number of Projects') ?? '1');
+        let projectIndex = 1;
+        const normPrj = path.normalize(projectPath).toLowerCase();
+        for (let i = 1; i <= projectCount; i++) {
+          const key = `Project ${String(i).padStart(4, '0')}`;
+          const val = unquote(cwsHeader?.get(key));
+          if (val) {
+            const resolved = path.isAbsolute(val) ? val : path.resolve(path.dirname(workspacePath), val);
+            if (path.normalize(resolved).toLowerCase() === normPrj) {
+              projectIndex = i;
+              break;
+            }
+          }
+        }
+        const suffix = String(projectIndex).padStart(4, '0');
+        const sectionName = `Default Build Config ${suffix} ${modeSuffix(mode)}`;
+        const cwsModeSection = cwsDoc.ensureSection(sectionName);
+        cwsModeSection.set('Debugging Level', quote(options.debuggingLevel));
+        cwsModeSection.set('Profile', quote(options.profiling));
+        setBoolean(cwsModeSection, 'Enable Uninitialized Locals Runtime Warning', options.detectUninitializedLocalsRuntime);
+        writeText(workspacePath, cwsDoc.toString());
+      } catch { /* ignore cws write error */ }
+    }
   }
 
   getTargetPath(projectPath: string, mode: CviBuildMode): string | undefined {

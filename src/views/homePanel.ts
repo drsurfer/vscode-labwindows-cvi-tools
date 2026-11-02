@@ -237,7 +237,8 @@ function renderHtml(state: HomeState): string {
           <button class="secondary" data-command="labwindowsCvi.chooseRunAction">Run options</button>
           <button class="secondary" data-command="labwindowsCvi.selectBuildMode">Build mode</button>
           <button class="secondary" data-command="labwindowsCvi.selectTargetType">Target type</button>
-          <button class="secondary" data-command="labwindowsCvi.editBuildSettings">Build settings</button>
+          <button class="secondary" data-command="labwindowsCvi.editTargetSettings">Target settings</button>
+          <button class="secondary" data-command="labwindowsCvi.editBuildOptions">Build options</button>
           <button class="secondary" data-command="labwindowsCvi.createNewFile">Create file</button>
         </div>` : '';
 
@@ -572,7 +573,7 @@ function renderHtml(state: HomeState): string {
         <span>Home</span>
       </button>
 
-      <button class="nav-button ${hasProject ? '' : 'disabled'}" ${hasProject ? 'data-command="labwindowsCvi.editBuildSettings"' : ''} title="${hasProject ? 'CVI Project Settings' : 'CVI Project Settings (Disabled: no active project)'}">
+      <button class="nav-button ${hasProject ? '' : 'disabled'}" ${hasProject ? 'data-command="labwindowsCvi.editTargetSettings"' : ''} title="${hasProject ? 'CVI Target Settings' : 'CVI Target Settings (Disabled: no active project)'}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"></circle>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>

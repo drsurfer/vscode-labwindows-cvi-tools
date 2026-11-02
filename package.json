@@ -490,14 +490,26 @@
         "category": "LabWindows/CVI"
       },
       {
-        "command": "labwindowsCvi.editBuildSettings",
-        "title": "Project Build Settings...",
+        "command": "labwindowsCvi.editTargetSettings",
+        "title": "Target Settings...",
         "icon": "$(settings-gear)",
         "category": "LabWindows/CVI"
       },
       {
-        "command": "labwindowsCvi.editBuildSettingsSafeMode",
-        "title": "Project Build Settings (Safe Mode)…",
+        "command": "labwindowsCvi.editTargetSettingsSafeMode",
+        "title": "Target Settings (Safe Mode)…",
+        "icon": "$(shield)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.editBuildOptions",
+        "title": "Build Options...",
+        "icon": "$(tools)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.editBuildOptionsSafeMode",
+        "title": "Build Options (Safe Mode)…",
         "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
@@ -879,7 +891,7 @@
           "group": "navigation@7"
         },
         {
-          "command": "labwindowsCvi.editBuildSettings",
+          "command": "labwindowsCvi.editTargetSettings",
           "when": "view == labwindowsCvi.workspaceExplorer",
           "group": "navigation@8"
         },
@@ -1201,14 +1213,24 @@
           "group": "settings@1"
         },
         {
-          "command": "labwindowsCvi.editBuildSettings",
+          "command": "labwindowsCvi.editTargetSettings",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
           "group": "settings@2"
         },
         {
-          "command": "labwindowsCvi.editBuildSettingsSafeMode",
+          "command": "labwindowsCvi.editTargetSettingsSafeMode",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
           "group": "settings@3"
+        },
+        {
+          "command": "labwindowsCvi.editBuildOptions",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
+          "group": "settings@4"
+        },
+        {
+          "command": "labwindowsCvi.editBuildOptionsSafeMode",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
+          "group": "settings@5"
         },
         {
           "command": "labwindowsCvi.generatePrototypes",
