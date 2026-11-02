@@ -16,6 +16,11 @@ A Visual Studio Code extension to manage, build, and debug **National Instrument
   - Manage logical CVI folders, project files, and include/exclude flags.
   - Discover local CVI installations automatically or define custom toolchain paths.
 
+- **Target Settings & Build Options**:
+  - Native UI dialogs for project Target Settings and compiler Build Options with Safe Mode support.
+  - Complete catalog of all 139 Clang 3.3 compiler warnings with interactive search, enable/disable, and error promotion.
+  - Automatic C/C++ IntelliSense synchronization (c_cpp_properties.json) with project compiler defines and C99 mode.
+
 - **Build Pipeline & Diagnostics**:
   - Direct execution of `compile.exe` for projects, individual source files, and entire workspaces.
   - Native build settings synchronization: pre-build, post-build, and custom build steps.

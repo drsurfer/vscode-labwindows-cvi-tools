@@ -2,6 +2,29 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.2] - 2026-11-02
+
+### Added
+- **Native LabWindows/CVI Build Options Dialog**:
+  - Added interactive Webview dialog for CVI Build Options (labwindowsCvi.editBuildOptions) and Safe Mode fallback (labwindowsCvi.editBuildOptionsSafeMode).
+  - Multi-configuration support (Debug, Release, Debug64, Release64, or All Configurations).
+  - Code generation controls: default calling convention (cdecl, stdcall), stack reserve and commit sizes, 32-bit & 64-bit image base addresses (with hexadecimal display), optimization levels, and execution profiling.
+  - Debugging options: debugging levels (None, Standard, Extended) and run-time uninitialized locals detection (persisted to .cws).
+  - C language features: C99 extensions and OpenMP multi-threading toggle.
+  - Include files: precompiled header include configuration with interactive file picker.
+  - Compiler defines: macro definitions field with interactive modal for predefined compiler macros (_CVI_, _NI_mswin32_, _WIN64, etc.).
+- **Clang 3.3 Compiler Warnings Catalog**:
+  - Integrated complete catalog of 139 Clang 3.3 compiler warnings matching National Instruments compile.exe internal definitions.
+  - Searchable warning management dialog with real-time text filter, individual enable/disable switches, error promotion (-Werror), level default restoration, and detailed descriptions.
+  - Strict roundtrip serialization into .prj (Warning List <Level>, Error List <Level>).
+- **C/C++ IntelliSense Synchronization**:
+  - Automatically propagates project compiler defines (/D..., -D...) and C99 settings into .vscode/c_cpp_properties.json.
+
+### Changed
+- **Target Settings vs. Build Options Realignment**:
+  - Renamed previous build settings to **Target Settings** (labwindowsCvi.editTargetSettings, labwindowsCvi.editTargetSettingsSafeMode) to match official LabWindows/CVI nomenclature.
+  - Preserved backward-compatible command aliases for labwindowsCvi.editBuildSettings.
+
 ## [0.0.1] - 2026-11-02
 
 ### Added
