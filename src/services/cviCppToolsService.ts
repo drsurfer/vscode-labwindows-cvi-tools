@@ -673,17 +673,31 @@ export class CviCppToolsService implements vscode.Disposable {
       ...additional.map(existingPath)
     ].filter((value): value is string => !!value).map(toForwardSlashes));
 
+    const projectDefines: string[] = [];
+    let enableC99 = true;
+    for (const projectRef of workspace.projects) {
+      if (projectRef.exists) {
+        try {
+          const buildOpts = this.parser.getNativeBuildOptions(projectRef.absolutePath, workspace.path, 'debug');
+          projectDefines.push(...parseCompilerDefines(buildOpts.compilerDefines));
+          if (!buildOpts.enableC99) {
+            enableC99 = false;
+          }
+        } catch { /* ignore project parse failure */ }
+      }
+    }
+
     const configuration: CppToolsConfiguration = {
       name: MANAGED_CONFIGURATION_NAME,
       intelliSenseMode: 'windows-clang-x86',
-      cStandard: 'c11',
+      cStandard: enableC99 ? 'c99' : 'c11',
       cppStandard: 'c++17',
       includePath,
       browse: {
         path: browsePath,
         limitSymbolsToIncludedHeaders: false
       },
-      defines: defaultDefines()
+      defines: unique([...defaultDefines(), ...projectDefines])
     };
 
     const compilerPath = this.resolveCompilerPath(installation);
@@ -729,6 +743,27 @@ function defaultDefines(): string[] {
     'WIN32',
     '_CRT_SECURE_NO_WARNINGS'
   ];
+}
+
+function parseCompilerDefines(rawDefines: string): string[] {
+  if (!rawDefines || !rawDefines.trim()) {
+    return [];
+  }
+  const result: string[] = [];
+  const tokens = rawDefines.match(/(?:[^\s"]+|"[^"]*")+/g) || [];
+  for (const token of tokens) {
+    let clean = token.trim();
+    if (clean.startsWith('"') && clean.endsWith('"')) {
+      clean = clean.slice(1, -1).trim();
+    }
+    if (clean.startsWith('/D') || clean.startsWith('-D')) {
+      clean = clean.slice(2).trim();
+    }
+    if (clean) {
+      result.push(clean);
+    }
+  }
+  return result;
 }
 
 function findWindowsKitIncludeDirectories(): string[] {

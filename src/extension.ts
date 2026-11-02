@@ -13,6 +13,7 @@ import { ensureBundledCviLibraryPack } from './services/cviLibraryPackService';
 import { CviTemplateService } from './services/cviTemplateService';
 import { CviProjectSettingsService } from './services/cviProjectSettingsService';
 import { BuildSettingsPanel } from './views/buildSettingsPanel';
+import { BuildOptionsPanel } from './views/buildOptionsPanel';
 import { QuickActionsView } from './views/quickActionsView';
 import { CviCompletionProvider, CviSourceSymbol, CviSymbolService, isSourceOrHeader } from './services/cviSymbolService';
 import { CviFunctionPanelService } from './services/cviFunctionPanelService';
@@ -51,6 +52,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const home = new HomePanel(context, workspaces, builds, installations);
   const buildSettings = new BuildSettingsPanel(workspaces, parser, projectSettings);
+  const buildOptions = new BuildOptionsPanel(workspaces, parser, cppTools);
   const quickActions = new QuickActionsView(workspaces, builds, projectSettings);
   const quickActionsRegistration = vscode.window.registerTreeDataProvider('labwindowsCvi.quickActions', quickActions);
 
@@ -111,6 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     workspaces,
     home,
     buildSettings,
+    buildOptions,
     quickActions,
     quickActionsRegistration,
     cppTools,
@@ -191,8 +194,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.selectTargetTypeEXE', () => workspaces.selectTargetType()),
     register('labwindowsCvi.selectTargetTypeDLL', () => workspaces.selectTargetType()),
     register('labwindowsCvi.selectTargetTypeLIB', () => workspaces.selectTargetType()),
+    register('labwindowsCvi.editTargetSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
+    register('labwindowsCvi.editTargetSettingsSafeMode', (node?: ProjectNode) => buildSettings.showSafeMode(node?.ref)),
     register('labwindowsCvi.editBuildSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
     register('labwindowsCvi.editBuildSettingsSafeMode', (node?: ProjectNode) => buildSettings.showSafeMode(node?.ref)),
+    register('labwindowsCvi.editBuildOptions', (node?: ProjectNode) => buildOptions.show(node?.ref)),
+    register('labwindowsCvi.editBuildOptionsSafeMode', (node?: ProjectNode) => buildOptions.showSafeMode(node?.ref)),
     register('labwindowsCvi.executeProject', (node?: ProjectNode) => node ? builds.buildAndRun(node.ref) : undefined),
     register('labwindowsCvi.debugProjectInCvi', async (node?: ProjectNode) => { if (node?.ref) await workspaces.setActiveProject(node.ref); return await builds.debugWithVsCode(node?.ref); }),
     register('labwindowsCvi.editProjectInCvi', (node?: ProjectNode) => node ? builds.openProjectInCvi(node.ref.absolutePath) : undefined),

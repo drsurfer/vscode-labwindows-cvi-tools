@@ -74,11 +74,11 @@ export class BuildSettingsPanel implements vscode.Disposable {
     this.projectRef = ref;
     if (!this.panel) {
       this.selectedScope = this.buildMode;
-      this.panel = vscode.window.createWebviewPanel('labwindowsCvi.buildSettings', 'CVI Project Build Settings', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
+      this.panel = vscode.window.createWebviewPanel('labwindowsCvi.targetSettings', 'CVI Project Target Settings', vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true });
       this.panel.onDidDispose(() => { this.panel = undefined; this.projectRef = undefined; });
       this.panel.webview.onDidReceiveMessage((message) => void this.handleMessage(message));
     }
-    this.panel.title = `CVI Build Settings — ${ref.name}`;
+    this.panel.title = `CVI Target Settings — ${ref.name}`;
     this.panel.webview.html = this.render(ref);
     this.panel.reveal(vscode.ViewColumn.Active);
   }
@@ -126,7 +126,7 @@ export class BuildSettingsPanel implements vscode.Disposable {
         { id: 'postBuildActions', label: '$(list-ordered) Post-build actions', description: `${projectSettings.postBuildActions.length} action(s)` },
         { id: 'forcedModules', label: '$(library) LoadExternalModule files', description: `${target.forcedModules.length} module(s)` },
         { id: 'close', label: '$(close) Close safe-mode editor' }
-      ], { title: `CVI Build Settings (Safe Mode) — ${ref.name}`, placeHolder: 'Select a setting to edit' });
+      ], { title: `CVI Target Settings (Safe Mode) — ${ref.name}`, placeHolder: 'Select a setting to edit' });
 
       if (!choice || choice.id === 'close') {
         this.selectedScope = scope;
