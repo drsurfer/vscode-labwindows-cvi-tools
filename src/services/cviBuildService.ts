@@ -8,8 +8,6 @@ import { CviInstallation, CviWorkspace } from '../model/types';
 import { CviInstallationService } from './cviInstallationService';
 import { CviProjectSettingsService } from './cviProjectSettingsService';
 import { CviWorkspaceService } from './cviWorkspaceService';
-import { CviBreakpointSyncService } from './cviBreakpointSyncService';
-import { CviMsvcLinkService } from './cviMsvcLinkService';
 import { CviGdbDebugService } from './cviGdbDebugService';
 import { normalizeRuntimePath } from '../utils/pathUtils';
 
@@ -59,8 +57,6 @@ export class CviBuildService {
     private readonly workspaces: CviWorkspaceService,
     private readonly installations: CviInstallationService,
     private readonly projectSettings: CviProjectSettingsService,
-    private readonly breakpoints: CviBreakpointSyncService,
-    private readonly msvcLinker: CviMsvcLinkService,
     private readonly gdbService: CviGdbDebugService,
     private readonly output: vscode.OutputChannel,
     private readonly traceOutput: vscode.OutputChannel,
@@ -71,14 +67,6 @@ export class CviBuildService {
 
   get buildMode(): CviBuildMode {
     return vscode.workspace.getConfiguration('labwindowsCvi').get<CviBuildMode>('buildMode', 'debug');
-  }
-
-  get buildToolchain(): 'standard' | 'msvc-pdb' {
-    return vscode.workspace.getConfiguration('labwindowsCvi').get<'standard' | 'msvc-pdb'>('buildToolchain', 'standard');
-  }
-
-  get nativeDebugger(): 'gdb' | 'cppvsdbg' {
-    return vscode.workspace.getConfiguration('labwindowsCvi').get<'gdb' | 'cppvsdbg'>('nativeDebugger', 'gdb');
   }
 
   async chooseBuildAction(projectRef?: CviWorkspaceProjectRef): Promise<void> {
@@ -106,16 +94,13 @@ export class CviBuildService {
     const selected = await vscode.window.showQuickPick([
       { label: '$(play) Build and run', value: 'buildRun', description: 'Build the active target and launch the resulting executable' },
       { label: '$(run) Run without build', value: 'runOnly', description: 'Launch the existing target without invoking compile.exe' },
-      { label: '$(debug-alt) Build and run debug', value: 'debug', description: 'Build locally, synchronize breakpoints and run the native CVI debugger' },
-      { label: '$(debug) Build and Debug in VS Code (Native Debugger)', value: 'debugVsCode', description: 'Build and start native VS Code debugger (GDB with DWARF symbols or MSVC PDB)' }
+      { label: '$(debug) Build and Debug in VS Code (Native GDB)', value: 'debugVsCode', description: 'Build and start native VS Code debugger (GDB with DWARF symbols)' }
     ], { title: 'LabWindows/CVI run action' });
     if (!selected) {
       return;
     }
     if (selected.value === 'runOnly') {
       await this.runWithoutBuild(projectRef);
-    } else if (selected.value === 'debug') {
-      await vscode.commands.executeCommand('labwindowsCvi.nativeRun');
     } else if (selected.value === 'debugVsCode') {
       await this.debugWithVsCode(projectRef);
     } else {
@@ -137,8 +122,7 @@ export class CviBuildService {
     vscode.window.showInformationMessage(`LabWindows/CVI build mode: ${selected.label}.`);
   }
 
-  async build(rebuild = false, projectRef?: CviWorkspaceProjectRef, forMsvcRelink?: boolean): Promise<boolean> {
-    const isMsvcRelink = forMsvcRelink ?? (this.buildToolchain === 'msvc-pdb');
+  async build(rebuild = false, projectRef?: CviWorkspaceProjectRef): Promise<boolean> {
     const ref = projectRef ?? this.workspaces.activeProjectRef;
     if (!ref?.exists) {
       vscode.window.showErrorMessage('No existing active CVI project is available for build.');
@@ -220,7 +204,7 @@ export class CviBuildService {
           }
         }
 
-        const args: string[] = [item.absolutePath, ...this.commonCompilerArguments(rebuild, isMsvcRelink)];
+        const args: string[] = [item.absolutePath, ...this.commonCompilerArguments(rebuild)];
         const result = await this.runCviCompile(installation.compileExe, args, cwd, `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`);
         if (!result.success) {
           failedAt = this.currentReport?.failedAt ?? `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`;
@@ -228,15 +212,7 @@ export class CviBuildService {
         }
         report.projectBuilt += 1;
 
-        if (isMsvcRelink && this.msvcLinker && project?.targetType !== 'Static Library') {
-          this.appendSection('MSVC RELINK (PDB GENERATION)');
-          const relinkResult = await this.msvcLinker.relinkWithMsvc(item, this.buildMode);
-          if (!relinkResult.success) {
-            failedAt = `MSVC Linker — ${item.name}`;
-            this.recordSyntheticFailure(failedAt, relinkResult.error || 'MSVC link.exe returned an error status.');
-            return false;
-          }
-        } else if (!isMsvcRelink && (this.buildMode === 'debug' || this.buildMode === 'debug64') && targetPath && project?.targetType !== 'Static Library') {
+        if ((this.buildMode === 'debug' || this.buildMode === 'debug64') && targetPath && project?.targetType !== 'Static Library') {
           const normTarget = normalizeRuntimePath(targetPath);
           if (fs.existsSync(normTarget)) {
             await this.gdbService.enableDwarfSymbols(normTarget);
@@ -525,36 +501,6 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     this.output.appendLine(`[CVI] Started ${executablePath} ${args.map(renderArgument).join(' ')}`);
   }
 
-  async debugInCvi(projectRef?: CviWorkspaceProjectRef): Promise<void> {
-    const ref = projectRef ?? this.workspaces.activeProjectRef;
-    if (!ref?.exists) {
-      vscode.window.showErrorMessage('No existing CVI project is available for debugging.');
-      return;
-    }
-    if (this.buildMode === 'release' || this.buildMode === 'release64') {
-      const debugMode: CviBuildMode = this.buildMode === 'release64' ? 'debug64' : 'debug';
-      const answer = await vscode.window.showWarningMessage(`The active build mode is ${this.buildMode}. Switch to ${debugMode}, build the project and open the native CVI debugger?`, 'Switch, build and open', 'Cancel');
-      if (answer !== 'Switch, build and open') {
-        return;
-      }
-      await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', debugMode, vscode.ConfigurationTarget.Workspace);
-    }
-    const success = await this.build(false, ref);
-    if (!success) {
-      return;
-    }
-    const workspace = this.workspaces.currentWorkspace;
-    const synchronizeBreakpoints = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('synchronizeBreakpointsBeforeNativeDebug', true);
-    let synchronized = false;
-    if (synchronizeBreakpoints && workspace && path.extname(workspace.path).toLowerCase() === '.cws') {
-      synchronized = Boolean(await this.breakpoints.synchronize(ref, false));
-    }
-    await this.openInCvi(workspace?.path ?? ref.absolutePath, workspace);
-    vscode.window.showInformationMessage(synchronized
-      ? 'Debug build opened in CVI. Standard enabled VS Code breakpoints from the selected project were synchronized to the native CVI workspace. Use CVI for step commands, watch expressions and variable inspection.'
-      : 'Debug build opened in CVI. Use CVI for breakpoints, step commands, watch expressions and variable inspection.');
-  }
-
   async prepareDebugConfiguration(projectRef?: CviWorkspaceProjectRef): Promise<vscode.DebugConfiguration | undefined> {
     const ref = projectRef ?? this.workspaces.activeProjectRef;
     if (!ref?.exists) {
@@ -573,11 +519,7 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
       await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', debugMode, vscode.ConfigurationTarget.Workspace);
     }
 
-    const nativeDebugger = this.nativeDebugger;
-    const isMsvc = nativeDebugger === 'cppvsdbg';
-
-    // Perform build (with MSVC relink only if MSVC mode is requested)
-    const success = await this.build(false, ref, isMsvc);
+    const success = await this.build(false, ref);
     if (!success) {
       return undefined;
     }
@@ -615,8 +557,7 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     const workingDir = run.workingDirectory.trim() ? normalizeRuntimePath(run.workingDirectory.trim()) : path.dirname(executablePath);
     const argsList = run.arguments.trim() ? this.projectSettings.parseArguments(run.arguments) : [];
 
-    if (nativeDebugger === 'gdb') {
-      const gdbPath = await this.gdbService.findGdb();
+          const gdbPath = await this.gdbService.findGdb();
       if (!gdbPath) {
         vscode.window.showErrorMessage(
           'GDB (gdb.exe) was not found in PATH or standard MinGW/WinLibs directories. ' +
@@ -667,22 +608,6 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
       this.output.appendLine(`[CVI Debug] Prepared VS Code native debugging session (GDB) for ${executablePath}...`);
       this.output.appendLine(`  Debugger : ${gdbPath}`);
       return debugConfig;
-    } else {
-      const debugConfig: vscode.DebugConfiguration = {
-        name: `CVI Debug (MSVC): ${ref.name}`,
-        type: 'cppvsdbg',
-        request: 'launch',
-        program: executablePath,
-        args: argsList,
-        stopAtEntry: false,
-        cwd: workingDir,
-        environment: envList,
-        console: 'externalTerminal'
-      };
-
-      this.output.appendLine(`[CVI Debug] Prepared VS Code native debugging session (cppvsdbg) for ${executablePath}...`);
-      return debugConfig;
-    }
   }
 
   async debugWithVsCode(projectRef?: CviWorkspaceProjectRef): Promise<boolean> {
@@ -692,25 +617,6 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     }
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     return await vscode.debug.startDebugging(workspaceFolder, debugConfig);
-  }
-
-  async relinkMsvc(projectRef?: CviWorkspaceProjectRef): Promise<boolean> {
-    const ref = projectRef ?? this.workspaces.activeProjectRef;
-    if (!ref?.exists) {
-      vscode.window.showErrorMessage('No existing active CVI project is available for relink.');
-      return false;
-    }
-    if (!this.msvcLinker) {
-      vscode.window.showErrorMessage('MSVC linker service is not available.');
-      return false;
-    }
-    const result = await this.msvcLinker.relinkWithMsvc(ref, this.buildMode);
-    if (result.success) {
-      vscode.window.showInformationMessage(`Relink with MSVC completed successfully. PDB: ${path.basename(result.pdbPath)}`);
-    } else {
-      vscode.window.showErrorMessage('Relink with MSVC failed. Open LabWindows/CVI output channel for details.');
-    }
-    return result.success;
   }
 
   async openWorkspaceInCvi(): Promise<void> {
@@ -865,16 +771,13 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     return installation;
   }
 
-  private commonCompilerArguments(rebuild: boolean, forMsvcRelink = false): string[] {
+  private commonCompilerArguments(rebuild: boolean): string[] {
     const config = vscode.workspace.getConfiguration('labwindowsCvi');
     const customConfig = config.get<string>('customBuildConfiguration', '').trim();
     const extraArguments = config.get<string[]>('extraCompilerArguments', []);
     const args: string[] = [`-${this.buildMode}`];
     if (rebuild) args.push('-rebuild');
     if (customConfig) args.push(`-config=${customConfig}`);
-    if (forMsvcRelink && (this.buildMode === 'debug' || this.buildMode === 'debug64')) {
-      args.push('-debuglevel=1');
-    }
     args.push(...extraArguments);
     return args;
   }

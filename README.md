@@ -24,8 +24,6 @@ A Visual Studio Code extension to manage, build, and debug **National Instrument
 - **Integrated Debugging**:
   - **VS Code Run & Debug Integration**: Native launch configuration provider (`cvi`) with F5 shortcut support.
   - **Native GDB Pipeline**: Automated DWARF symbol generation and GDB debug adapter bridge.
-  - **MSVC / PDB Pipeline**: Support for MSVC toolchain integration and PDB symbol generation.
-  - **ActiveX / DDE Native Debugger Bridge**: Synchronize breakpoints and drive the native CVI debugger directly from the VS Code debug toolbar.
 
 - **Editor Helpers & Tools**:
   - Integrated CVI API & Library Explorer (derived from JC Lib).

@@ -10,6 +10,15 @@ All notable changes to the "LabWindows/CVI Tools" extension will be documented i
   - Dedicated monochromatic Activity Bar / sidebar icon (`media/cvi-tools.svg`).
   - Full-color Home Page hero and header branding icon (`media/cvi-tools-hero.svg`) with optional light/dark variant support.
 
+### Removed
+- **DDE / ActiveX Automation Bridge**: Fully decommissioned legacy DDE and ActiveX command bridges (`cvi-dde-command.ps1`, `cvi-activex-command.ps1`, `cviNativeCommandService.ts`, `cviBreakpointSyncService.ts`).
+- **Sidebar "CVI Debug" View**: Removed redundant CVI Debug sidebar panel (`labwindowsCvi.debugControls`) and associated menu/status bar actions.
+- **Legacy "Debug in CVI"**: Replaced external IDE debug actions with native VS Code GDB debugging.
+- **Experimental MSVC PDB Pipeline**: Removed non-functional MSVC link service and PDB generation stubs.
+
+### Added
+- **CVI Project Settings Debug Button**: Added dedicated **Debug** button in the *Build and run* section of the CVI Project Settings control center.
+
 ### Changed
 - **Home Page UX/UI Redesign**:
   - Replaced hardcoded inline SVG with dynamic file-based icon loading from `media/`.

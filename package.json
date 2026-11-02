@@ -54,13 +54,6 @@
           "showCollapseAll": false
         },
         {
-          "id": "labwindowsCvi.debugControls",
-          "name": "CVI Debug",
-          "contextualTitle": "CVI Debug",
-          "icon": "media/cvi-tools.svg",
-          "showCollapseAll": false
-        },
-        {
           "id": "labwindowsCvi.fileSymbols",
           "name": "CVI File Symbols",
           "contextualTitle": "CVI File Symbols",
@@ -315,27 +308,10 @@
         "title": "Collapse All"
       },
       {
-        "command": "labwindowsCvi.debugInCvi",
-        "title": "LabWindows/CVI: Build & Run Debug",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-alt)"
-      },
-      {
-        "command": "labwindowsCvi.debugProjectInCvi",
-        "title": "Build & Run Debug",
-        "category": "LabWindows/CVI"
-      },
-      {
         "command": "labwindowsCvi.debugWithVsCode",
-        "title": "LabWindows/CVI: Build & Debug in VS Code (Native Debugger)",
+        "title": "LabWindows/CVI: Debug with VS Code (Native GDB)",
         "category": "LabWindows/CVI",
         "icon": "$(debug)"
-      },
-      {
-        "command": "labwindowsCvi.relinkMsvc",
-        "title": "LabWindows/CVI: Relink Active Target with MSVC (PDB)",
-        "category": "LabWindows/CVI",
-        "icon": "$(tools)"
       },
       {
         "command": "labwindowsCvi.library.refresh",
@@ -585,78 +561,6 @@
         "category": "LabWindows/CVI"
       },
       {
-        "command": "labwindowsCvi.synchronizeBreakpoints",
-        "title": "LabWindows/CVI: Synchronize VS Code Breakpoints to Native Workspace",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-breakpoint)"
-      },
-      {
-        "command": "labwindowsCvi.clearSynchronizedBreakpoints",
-        "title": "LabWindows/CVI: Remove Synchronized Breakpoints from Native Workspace",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-breakpoint-unverified)"
-      },
-      {
-        "command": "labwindowsCvi.diagnoseBreakpointBridge",
-        "title": "LabWindows/CVI: Diagnose Native Breakpoint Bridge",
-        "category": "LabWindows/CVI",
-        "icon": "$(pulse)"
-      },
-      {
-        "command": "labwindowsCvi.chooseNativeDebugAction",
-        "title": "LabWindows/CVI: Native Debug Controls...",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-alt-small)"
-      },
-      {
-        "command": "labwindowsCvi.nativeBuild",
-        "title": "LabWindows/CVI: Build",
-        "category": "LabWindows/CVI",
-        "icon": "$(tools)"
-      },
-      {
-        "command": "labwindowsCvi.nativeRun",
-        "title": "LabWindows/CVI: Build & Run Debug",
-        "category": "LabWindows/CVI",
-        "icon": "$(play)"
-      },
-      {
-        "command": "labwindowsCvi.nativePause",
-        "title": "LabWindows/CVI: Pause",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-pause)"
-      },
-      {
-        "command": "labwindowsCvi.nativeContinue",
-        "title": "LabWindows/CVI: Continue",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-continue)"
-      },
-      {
-        "command": "labwindowsCvi.nativeStop",
-        "title": "LabWindows/CVI: Stop",
-        "category": "LabWindows/CVI",
-        "icon": "$(debug-stop)"
-      },
-      {
-        "command": "labwindowsCvi.nativeState",
-        "title": "LabWindows/CVI: Read Native CVI State",
-        "category": "LabWindows/CVI",
-        "icon": "$(pulse)"
-      },
-      {
-        "command": "labwindowsCvi.refreshNativeDebugView",
-        "title": "LabWindows/CVI: Refresh Native Debug Status",
-        "category": "LabWindows/CVI",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "labwindowsCvi.diagnoseNativeCommandBridge",
-        "title": "LabWindows/CVI: Diagnose Native Command Bridge",
-        "category": "LabWindows/CVI",
-        "icon": "$(tools)"
-      },
-      {
         "command": "labwindowsCvi.context.insertSnippet",
         "title": "Insert snippet",
         "category": "LabWindows/CVI"
@@ -887,16 +791,6 @@
           "command": "labwindowsCvi.refresh",
           "when": "view == labwindowsCvi.workspaceExplorer",
           "group": "navigation@9"
-        },
-        {
-          "command": "labwindowsCvi.refreshNativeDebugView",
-          "when": "view == labwindowsCvi.debugControls",
-          "group": "navigation@1"
-        },
-        {
-          "command": "labwindowsCvi.diagnoseNativeCommandBridge",
-          "when": "view == labwindowsCvi.debugControls",
-          "group": "navigation@2"
         },
         {
           "command": "labwindowsCvi.library.createPack",
@@ -1171,7 +1065,7 @@
           "group": "navigation@5"
         },
         {
-          "command": "labwindowsCvi.debugProjectInCvi",
+          "command": "labwindowsCvi.debugWithVsCode",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
           "group": "build@4"
         },
@@ -1342,10 +1236,6 @@
         },
         {
           "command": "labwindowsCvi.findFile",
-          "when": "false"
-        },
-        {
-          "command": "labwindowsCvi.debugProjectInCvi",
           "when": "false"
         },
         {
@@ -1712,115 +1602,6 @@
           "default": true,
           "description": "Show compact LabWindows/CVI actions in the VS Code status bar. These actions remain available when the CVI Workspace view is collapsed."
         },
-        "labwindowsCvi.synchronizeBreakpointsBeforeNativeDebug": {
-          "type": "boolean",
-          "default": true,
-          "description": "Synchronize standard enabled VS Code source breakpoints from the selected CVI project into the native .cws workspace before opening the LabWindows/CVI debugger."
-        },
-        "labwindowsCvi.synchronizeBreakpointsBeforeNativeRun": {
-          "type": "boolean",
-          "default": true,
-          "description": "Synchronize standard enabled VS Code source breakpoints into the native .cws workspace immediately before sending Run Project to the LabWindows/CVI native command server."
-        },
-        "labwindowsCvi.nativeCommandTimeoutMs": {
-          "type": "number",
-          "default": 10000,
-          "minimum": 500,
-          "description": "Timeout in milliseconds used for one native LabWindows/CVI command. The extension uses the historical DDE command server by default because it can target the workspace instance opened explicitly by the extension."
-        },
-        "labwindowsCvi.nativeCommandStartupTimeoutMs": {
-          "type": "number",
-          "default": 25000,
-          "minimum": 1000,
-          "description": "Maximum time in milliseconds to wait for the native LabWindows/CVI command bridge after the IDE is opened automatically."
-        },
-        "labwindowsCvi.nativePostIdeStartDelayMs": {
-          "type": "number",
-          "default": 2000,
-          "minimum": 0,
-          "description": "Delay in milliseconds inserted after automatically opening the LabWindows/CVI IDE and detecting its DDE command server, before sending build/debug session commands."
-        },
-        "labwindowsCvi.nativeDdeSessionStartupTimeoutMs": {
-          "type": "number",
-          "default": 30000,
-          "minimum": 5000,
-          "description": "Maximum time in milliseconds to establish the persistent DDE debug session before sending Run Project. The session stays open so Pause, Continue and Stop can be sent while the CVI user program is executing."
-        },
-        "labwindowsCvi.nativeActiveXProcessTimeoutMs": {
-          "type": "number",
-          "default": 15000,
-          "minimum": 5000,
-          "description": "Maximum host-process time in milliseconds allowed for the optional experimental PowerShell ActiveX compatibility bridge based on CVI.Application."
-        },
-        "labwindowsCvi.nativeBridgeProcessTimeoutMs": {
-          "type": "number",
-          "default": 120000,
-          "minimum": 30000,
-          "description": "Maximum host-process time in milliseconds allowed for the historical PowerShell DDE fallback bridge. The first DDE fallback invocation can compile and cache its managed helper locally."
-        },
-        "labwindowsCvi.activeXDiscoveryTimeoutMs": {
-          "type": "number",
-          "default": 10000,
-          "minimum": 3000,
-          "description": "Maximum time in milliseconds allowed for the targeted LabWindows/CVI ActiveX registry diagnostic."
-        },
-        "labwindowsCvi.powershellExecutable": {
-          "type": "string",
-          "default": "powershell.exe",
-          "description": "Windows PowerShell executable used to run the embedded LabWindows/CVI compatibility bridge and diagnostic scripts."
-        },
-        "labwindowsCvi.nativeCommandTransport": {
-          "type": "string",
-          "enum": [
-            "dde",
-            "auto",
-            "activex"
-          ],
-          "default": "dde",
-          "description": "Native CVI command transport. dde is the recommended default and avoids opening a second empty CVI instance. auto tries DDE first and ActiveX only as a fallback. activex is an experimental ActiveX-first compatibility mode."
-        },
-        "labwindowsCvi.allowActiveXAutoStart": {
-          "type": "boolean",
-          "default": false,
-          "description": "Experimental compatibility option. Allow the ActiveX bridge to create a CVI.Application COM instance when no running automation object is available. Keep disabled to avoid opening a second empty CVI workspace."
-        },
-        "labwindowsCvi.nativeDebuggerIdeWindowMode": {
-          "type": "string",
-          "enum": [
-            "minimized",
-            "normal"
-          ],
-          "default": "minimized",
-          "description": "Window mode used for the native CVI IDE backend when a VS Code debug session is launched. minimized keeps CVI in the background while VS Code owns the debug UI."
-        },
-        "labwindowsCvi.keepNativeIdeMinimizedDuringVsCodeDebug": {
-          "type": "boolean",
-          "default": true,
-          "description": "Keep the native CVI IDE minimized while VS Code controls the debug session through the inline DAP adapter."
-        },
-        "labwindowsCvi.nativeDapPollIntervalMs": {
-          "type": "number",
-          "default": 750,
-          "minimum": 300,
-          "description": "Polling interval used by the VS Code debug adapter to detect native CVI execution-state transitions such as breakpoint suspension."
-        },
-        "labwindowsCvi.nativeDapPollTimeoutMs": {
-          "type": "number",
-          "default": 1000,
-          "minimum": 500,
-          "description": "Timeout for one non-destructive execution-state polling request sent through the persistent DDE session. Poll failures do not close the session."
-        },
-        "labwindowsCvi.buildBeforeNativeDebug": {
-          "type": "boolean",
-          "default": true,
-          "description": "Build and link the active CVI project locally with compile.exe before opening the native CVI debugger. When the local build fails, the native CVI IDE is not opened."
-        },
-        "labwindowsCvi.nativeExecutionMonitorIntervalMs": {
-          "type": "number",
-          "default": 1500,
-          "minimum": 500,
-          "description": "Polling interval used after a native debug launch to detect natural program completion without altering the persistent DDE control session."
-        },
         "labwindowsCvi.buildLogDetail": {
           "type": "string",
           "default": "normal",
@@ -1875,37 +1656,6 @@
           "type": "boolean",
           "default": true,
           "description": "Log warnings in the LabWindows/CVI output channel and notify when opening a file in Windows-1252 mode that contains non-breaking spaces (0xA0), replacement characters, or characters incompatible with Windows-1252."
-        },
-        "labwindowsCvi.buildToolchain": {
-          "type": "string",
-          "enum": [
-            "standard",
-            "msvc-pdb"
-          ],
-          "enumDescriptions": [
-            "Standard LabWindows/CVI build via compile.exe and cvilink.exe.",
-            "Compile with compile.exe and relink with Microsoft link.exe to generate native PDB symbols for VS Code debugging."
-          ],
-          "default": "standard",
-          "description": "Select the linking toolchain: standard CVI linker or Microsoft link.exe for native PDB generation."
-        },
-        "labwindowsCvi.msvcLinkerPath": {
-          "type": "string",
-          "default": "",
-          "description": "Optional custom path to Microsoft link.exe. If empty, the extension automatically discovers Visual Studio or VC Build Tools via vswhere."
-        },
-        "labwindowsCvi.nativeDebugger": {
-          "type": "string",
-          "enum": [
-            "gdb",
-            "cppvsdbg"
-          ],
-          "enumDescriptions": [
-            "GDB debugger via VS Code cppdbg (recommended: uses standard CVI build with DWARF symbols, line-by-line debugging, variable inspection and breakpoints).",
-            "Visual Studio debugger via cppvsdbg (uses MSVC link.exe and PDB generation)."
-          ],
-          "default": "gdb",
-          "description": "Select the native debugger engine to use when debugging in VS Code."
         },
         "labwindowsCvi.gdbPath": {
           "type": "string",
@@ -1999,7 +1749,7 @@
         "configurationSnippets": [
           {
             "label": "LabWindows/CVI: Debug Active Project",
-            "description": "Build and debug active LabWindows/CVI project (GDB / MSVC)",
+            "description": "Build and debug active LabWindows/CVI project (GDB)",
             "body": {
               "type": "cvi",
               "request": "launch",
