@@ -1763,13 +1763,14 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^3.2.1",
+    "@vscode/vsce": "^4.1.0",
     "typescript": "^5.7.2"
   },
   "icon": "media/cvi-marketplace.png",
   "allowScripts": {
     "@vscode/vsce-sign@2.0.9": true,
-    "keytar@7.9.0": true
+    "keytar@7.9.0": true,
+    "@vscode/vsce-sign@2.1.0": true
   },
   "repository": {
     "type": "git",

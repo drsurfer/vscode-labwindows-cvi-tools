@@ -4,6 +4,9 @@ setlocal EnableDelayedExpansion
 :: Ensure working directory is the script directory
 cd /d "%~dp0"
 
+:: Suppress Node internal deprecation warnings (e.g. url.parse in VS Code CLI/Node 22+)
+set "NODE_OPTIONS=--no-deprecation"
+
 echo ========================================================
 echo   LabWindows/CVI Tools - Build, Package and Install
 echo ========================================================
