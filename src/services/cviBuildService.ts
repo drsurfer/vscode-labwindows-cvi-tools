@@ -601,6 +601,16 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
             description: 'Disable thread creation/exit log spam',
             text: 'set print thread-events off',
             ignoreFailures: true
+          },
+          {
+            description: 'Disable kernel debug event noise',
+            text: 'set debugevents off',
+            ignoreFailures: true
+          },
+          {
+            description: 'Disable kernel exception event trapping on break',
+            text: 'set debugexceptions off',
+            ignoreFailures: true
           }
         ]
       };
