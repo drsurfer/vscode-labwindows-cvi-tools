@@ -10,6 +10,7 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
   private currentSnapshot: CviResourceSnapshot | null = null;
   private lastSessionLeaks: CviResourceSnapshot | null = null;
+  private exitSnapshot: CviResourceSnapshot | null = null;
   private activeCviSession: vscode.DebugSession | null = null;
   private dumpFilePath: string | null = null;
   private disposables: vscode.Disposable[] = [];
@@ -97,9 +98,26 @@ export class CviResourceTrackerService implements vscode.Disposable {
           }
 
           return {
-            onDidSendMessage: (message: any) => {
+            onDidSendMessage: async (message: any) => {
               if (message.type === 'event' && message.event === 'stopped') {
                 const reason = message.body?.reason ?? 'breakpoint';
+                const description = String(message.body?.description || '').toLowerCase();
+                const text = String(message.body?.text || '').toLowerCase();
+
+                // Check if target stopped at exit
+                const isExit = description.includes('exit') || text.includes('exit');
+                if (isExit) {
+                  this.output.appendLine('[CVI Resources] Target reached process exit. Inspecting unreleased resources / leaks...');
+                  await this.refreshFromSession(session);
+                  this.exitSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
+                  try {
+                    await session.customRequest('continue', { threadId: message.body?.threadId ?? 1 });
+                  } catch {
+                    // ignore
+                  }
+                  return;
+                }
+
                 this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
                 const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
                 if (autoRefresh) {

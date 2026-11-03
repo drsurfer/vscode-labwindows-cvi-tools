@@ -166,7 +166,11 @@ export class CviCategoryGroupNode extends vscode.TreeItem {
 export class CviResourceItemNode extends vscode.TreeItem {
   constructor(public readonly item: CviResourceItem) {
     const hasStack = !!(item.callStack && item.callStack.length > 0);
-    super(item.id, hasStack ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    let displayLabel = item.id;
+    if (item.variableName) {
+      displayLabel = `${item.variableName} (${item.id})`;
+    }
+    super(displayLabel, hasStack ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
 
     const parts: string[] = [];
     if (item.sizeBytes) {
@@ -182,6 +186,9 @@ export class CviResourceItemNode extends vscode.TreeItem {
 
     const tooltipMd = new vscode.MarkdownString();
     tooltipMd.appendMarkdown(`### ${item.isLeaked ? '⚠️ Memory / Resource Leak' : 'CVI Allocated Resource'}\n\n`);
+    if (item.variableName) {
+      tooltipMd.appendMarkdown(`* **Variable**: \`${item.variableName}\`\n`);
+    }
     tooltipMd.appendMarkdown(`* **Handle / Pointer**: \`${item.id}\`\n`);
     tooltipMd.appendMarkdown(`* **Type**: ${item.typeLabel}\n`);
     if (item.sizeBytes) {

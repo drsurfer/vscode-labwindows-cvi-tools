@@ -611,6 +611,11 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
             description: 'Disable kernel exception event trapping on break',
             text: 'set debugexceptions off',
             ignoreFailures: true
+          },
+          {
+            description: 'Trap exit to evaluate true memory leaks',
+            text: 'break exit',
+            ignoreFailures: true
           }
         ]
       };
