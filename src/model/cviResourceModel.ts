@@ -96,9 +96,20 @@ export function parseResourceDump(content: string, workspaceRoot?: string, defau
       if (!currentItem.sourceFile && defaultSourceFile && currentItem.lineNumber) {
         currentItem.sourceFile = defaultSourceFile;
       }
+      if (!currentItem.variableName && currentItem.sourceFile && currentItem.lineNumber) {
+        currentItem.variableName = extractVariableNameFromSource(currentItem.sourceFile, currentItem.lineNumber);
+      }
       if (!currentItem.category) {
         currentItem.category = categorizeItem(currentItem.typeLabel || '', currentItem.details || '');
       }
+
+      // Exclude internal GDB infcall path string artifacts (65-byte blocks with no variable assignment)
+      if (currentItem.category === 'memory' && currentItem.sizeBytes === 65 && !currentItem.variableName) {
+        currentItem = null;
+        currentCallStack = [];
+        return;
+      }
+
       items.push(currentItem as CviResourceItem);
     }
     currentItem = null;

@@ -176,7 +176,7 @@ export class CviResourceItemNode extends vscode.TreeItem {
     if (item.sizeBytes) {
       parts.push(formatBytes(item.sizeBytes));
     }
-    if (item.details && item.details !== item.id) {
+    if (item.details && item.details !== item.id && (!item.sizeBytes || !item.details.toLowerCase().includes('byte'))) {
       parts.push(item.details);
     }
     if (item.sourceFile) {

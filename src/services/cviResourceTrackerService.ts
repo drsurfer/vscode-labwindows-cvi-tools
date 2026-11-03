@@ -157,12 +157,15 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
       const normalizedDumpPath = this.dumpFilePath.replace(/\\/g, '/');
 
-      // 1. Ensure runtime tracking is active in the CVI runtime
-      const activationCommands = [
+      // 1. Prepare raw buffer via VirtualAlloc to bypass CVI CRT malloc tracking entirely!
+      const strLen = normalizedDumpPath.length + 1;
+      const prepareCommands = [
         '-exec call (void)__SetCurrentDebuggingLevel(3)',
-        '-exec call (int)SetEnableResourceTracking(1)'
+        '-exec call (int)SetEnableResourceTracking(1)',
+        '-exec set $cvi_buf = (char*)VirtualAlloc(0, 512, 0x1000, 4)',
+        `-exec set {char[${strLen}]}$cvi_buf = "${normalizedDumpPath}"`
       ];
-      for (const cmd of activationCommands) {
+      for (const cmd of prepareCommands) {
         try {
           await targetSession.customRequest('evaluate', { expression: cmd, context: 'repl' });
         } catch {
@@ -170,12 +173,12 @@ export class CviResourceTrackerService implements vscode.Disposable {
         }
       }
 
-      // 2. Invoke __CVI_Resource_DumpToFile with various fallbacks
+      // 2. Invoke __CVI_Resource_DumpToFile using $cvi_buf (no string literal -> zero CRT mallocs!)
       const dumpCommands = [
+        '-exec call (int)__CVI_Resource_DumpToFile($cvi_buf)',
+        '-exec p (int)__CVI_Resource_DumpToFile($cvi_buf)',
         `-exec call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
-        `-exec p (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
-        `call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
-        `(int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`
+        `call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`
       ];
 
       let dumpSuccess = false;
