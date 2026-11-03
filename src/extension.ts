@@ -22,6 +22,8 @@ import { CviContextToolsService } from './services/cviContextToolsService';
 import { CviEncodingService } from './services/cviEncodingService';
 import { CviGdbDebugService } from './services/cviGdbDebugService';
 import { CviDebugConfigurationProvider } from './providers/cviDebugConfigurationProvider';
+import { CviResourceTrackerService } from './services/cviResourceTrackerService';
+import { CviResourceTreeProvider } from './providers/cviResourceTreeProvider';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('LabWindows/CVI');
@@ -55,6 +57,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const buildOptions = new BuildOptionsPanel(workspaces, parser, cppTools);
   const quickActions = new QuickActionsView(workspaces, builds, projectSettings);
   const quickActionsRegistration = vscode.window.registerTreeDataProvider('labwindowsCvi.quickActions', quickActions);
+  const resourceTracker = new CviResourceTrackerService(output);
+  const resourceTreeProvider = new CviResourceTreeProvider(resourceTracker);
+  const resourceTreeView = vscode.window.createTreeView('labwindowsCvi.resourceTracking', { treeDataProvider: resourceTreeProvider, showCollapseAll: true });
 
   const statusBarItems = [
     createStatusBarAction('$(home)', 'LabWindows/CVI home', 'labwindowsCvi.openHome', 99),
@@ -286,12 +291,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.saveAll', () => vscode.commands.executeCommand('workbench.action.files.saveAll')),
     register('labwindowsCvi.expandAll', () => focusTreeThen('list.expandAll')),
     register('labwindowsCvi.collapseAll', () => focusTreeThen('list.collapseAll')),
-    register('labwindowsCvi.sanitizeCurrentFile', () => encodingService.sanitizeActiveDocument())
+    register('labwindowsCvi.sanitizeCurrentFile', () => encodingService.sanitizeActiveDocument()),
+    register('labwindowsCvi.refreshResourceTracking', () => resourceTreeProvider.refresh()),
+    register('labwindowsCvi.clearResourceTracking', () => resourceTracker.clear()),
+    register('labwindowsCvi.exportResourceReport', () => resourceTracker.exportReport()),
+    register('labwindowsCvi.openResourceLocation', async (arg?: { file?: string; line?: number }) => {
+      if (!arg?.file) return;
+      try {
+        const document = await vscode.workspace.openTextDocument(arg.file);
+        const line = Math.max(0, (arg.line ?? 1) - 1);
+        const range = new vscode.Range(line, 0, line, 0);
+        await vscode.window.showTextDocument(document, { selection: range, preview: true });
+      } catch {
+        vscode.window.showErrorMessage(`Could not open source file: ${arg.file}`);
+      }
+    })
   );
 
   const debugConfigProvider = new CviDebugConfigurationProvider(workspaces, builds);
   context.subscriptions.push(
-    vscode.debug.registerDebugConfigurationProvider('cvi', debugConfigProvider)
+    vscode.debug.registerDebugConfigurationProvider('cvi', debugConfigProvider),
+    resourceTracker,
+    resourceTreeView
   );
 
   ensureBundledCviLibraryPack(context, output);

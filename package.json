@@ -67,6 +67,15 @@
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
+      ],
+      "debug": [
+        {
+          "id": "labwindowsCvi.resourceTracking",
+          "name": "CVI Resource Tracking",
+          "contextualTitle": "LabWindows/CVI Resources",
+          "icon": "media/cvi-tools.svg",
+          "showCollapseAll": true
+        }
       ]
     },
     "viewsWelcome": [
@@ -700,6 +709,24 @@
         "title": "Sanitize Invisible / Incompatible Characters in Current File",
         "category": "LabWindows/CVI",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "labwindowsCvi.refreshResourceTracking",
+        "title": "LabWindows/CVI: Refresh Resource Tracking",
+        "icon": "$(refresh)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.clearResourceTracking",
+        "title": "LabWindows/CVI: Clear Resource Tracking",
+        "icon": "$(clear-all)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.exportResourceReport",
+        "title": "LabWindows/CVI: Export Resource Tracking Report",
+        "icon": "$(save)",
+        "category": "LabWindows/CVI"
       }
     ],
     "menus": {
@@ -833,6 +860,21 @@
           "command": "labwindowsCvi.generateFileSymbolsSource",
           "when": "view == labwindowsCvi.fileSymbols",
           "group": "navigation@5"
+        },
+        {
+          "command": "labwindowsCvi.refreshResourceTracking",
+          "when": "view == labwindowsCvi.resourceTracking",
+          "group": "navigation@1"
+        },
+        {
+          "command": "labwindowsCvi.exportResourceReport",
+          "when": "view == labwindowsCvi.resourceTracking",
+          "group": "navigation@2"
+        },
+        {
+          "command": "labwindowsCvi.clearResourceTracking",
+          "when": "view == labwindowsCvi.resourceTracking",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -1693,6 +1735,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show the LabWindows/CVI Tools home page when VS Code starts up."
+        },
+        "labwindowsCvi.resourceTracking.autoRefreshOnBreakpoint": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically query and update CVI resource tracking when paused at a breakpoint."
+        },
+        "labwindowsCvi.resourceTracking.notifyOnLeaks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification with leak details when a debugged CVI program terminates with unreleased resources."
         }
       }
     },
