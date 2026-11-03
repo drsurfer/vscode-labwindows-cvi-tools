@@ -182,7 +182,30 @@ export class CviResourceTrackerService implements vscode.Disposable {
       if (dumpSuccess && fs.existsSync(this.dumpFilePath)) {
         const content = fs.readFileSync(this.dumpFilePath, 'utf8');
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const parsed = parseResourceDump(content, workspaceRoot);
+        let defaultSourceFile = vscode.window.activeTextEditor?.document.fileName;
+        if (!defaultSourceFile && workspaceRoot) {
+          try {
+            const findC = (dir: string): string | undefined => {
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              for (const e of entries) {
+                if (e.isFile() && e.name.endsWith('.c') && !e.name.startsWith('.')) {
+                  return path.join(dir, e.name);
+                }
+                if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules' && e.name !== '.git') {
+                  const sub = findC(path.join(dir, e.name));
+                  if (sub) {
+                    return sub;
+                  }
+                }
+              }
+              return undefined;
+            };
+            defaultSourceFile = findC(workspaceRoot);
+          } catch {
+            // ignore
+          }
+        }
+        const parsed = parseResourceDump(content, workspaceRoot, defaultSourceFile);
         parsed.sessionId = targetSession.id;
         parsed.isActiveSession = true;
         this.currentSnapshot = parsed;
