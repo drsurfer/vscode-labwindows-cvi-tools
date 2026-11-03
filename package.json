@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -482,7 +482,7 @@
       },
       {
         "command": "labwindowsCvi.editTargetSettingsSafeMode",
-        "title": "Target Settings (Safe Mode)…",
+        "title": "Target Settings (Safe Mode)\u2026",
         "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
@@ -494,7 +494,7 @@
       },
       {
         "command": "labwindowsCvi.editBuildOptionsSafeMode",
-        "title": "Build Options (Safe Mode)…",
+        "title": "Build Options (Safe Mode)\u2026",
         "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },

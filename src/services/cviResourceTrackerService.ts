@@ -15,6 +15,20 @@ export class CviResourceTrackerService implements vscode.Disposable {
   private dumpFilePath: string | null = null;
   private disposables: vscode.Disposable[] = [];
   private isRefreshing = false;
+  private exitBreakpointAddress?: string;
+
+  setExitBreakpointAddress(address: string | undefined): void {
+    this.exitBreakpointAddress = address;
+    this.output.appendLine(`[CVI Resources] Exit trap configured for instruction address: ${address || 'none'}`);
+  }
+
+  private matchesAddress(a: string, b: string): boolean {
+    try {
+      return BigInt(a) === BigInt(b);
+    } catch {
+      return a.toLowerCase() === b.toLowerCase();
+    }
+  }
 
   constructor(
     private readonly output: vscode.OutputChannel
@@ -108,8 +122,15 @@ export class CviResourceTrackerService implements vscode.Disposable {
                   const stackResp = await session.customRequest('stackTrace', { threadId, levels: 1 });
                   const topFrame = stackResp?.stackFrames?.[0];
                   const funcName = String(topFrame?.name || '').toLowerCase();
-                  if (funcName.includes('exit')) {
-                    this.output.appendLine(`[CVI Resources] Target reached ${topFrame.name}. Inspecting true leaks...`);
+                  const ipRef = String(topFrame?.instructionPointerReference || '');
+
+                  const isExitTrap =
+                    funcName.includes('exit') ||
+                    funcName.includes('closecvirte') ||
+                    (!!this.exitBreakpointAddress && !!ipRef && this.matchesAddress(ipRef, this.exitBreakpointAddress));
+
+                  if (isExitTrap) {
+                    this.output.appendLine(`[CVI Resources] Target reached exit trap (${topFrame?.name || ''} at ${ipRef}). Inspecting true leaks...`);
                     await this.refreshFromSession(session);
                     this.exitSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
                     await session.customRequest('continue', { threadId });

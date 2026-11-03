@@ -569,6 +569,65 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
       // Ensure DWARF symbols are enabled via objcopy
       await this.gdbService.enableDwarfSymbols(executablePath);
 
+      // Find return address of main for leak detection trap
+      const mainRetAddr = await this.gdbService.findMainReturnAddress(executablePath, gdbPath);
+      
+      if (mainRetAddr) {
+        this.output.appendLine(`[CVI Debug] Configured exit trap breakpoint on main return at ${mainRetAddr}`);
+      }
+
+      const setupCommands: any[] = [
+        {
+          description: 'Enable pretty-printing for gdb',
+          text: '-enable-pretty-printing',
+          ignoreFailures: true
+        },
+        {
+          description: 'Do not stop on DLL load/unload events',
+          text: 'set stop-on-solib-events 0',
+          ignoreFailures: true
+        },
+        {
+          description: 'Allow pending breakpoints for shared libraries',
+          text: 'set breakpoint pending on',
+          ignoreFailures: true
+        },
+        {
+          description: 'Disable thread creation/exit log spam',
+          text: 'set print thread-events off',
+          ignoreFailures: true
+        },
+        {
+          description: 'Disable kernel debug event noise',
+          text: 'set debugevents off',
+          ignoreFailures: true
+        },
+        {
+          description: 'Disable kernel exception event trapping on break',
+          text: 'set debugexceptions off',
+          ignoreFailures: true
+        },
+        {
+          description: 'Trap exit at CloseCVIRTE if called',
+          text: 'break CloseCVIRTE',
+          ignoreFailures: true
+        }
+      ];
+
+      if (mainRetAddr) {
+        setupCommands.push({
+          description: 'Trap exit at main return to evaluate true memory leaks',
+          text: `break *${mainRetAddr}`,
+          ignoreFailures: true
+        });
+      } else {
+        setupCommands.push({
+          description: 'Trap exit to evaluate true memory leaks',
+          text: 'break exit',
+          ignoreFailures: true
+        });
+      }
+
       const debugConfig: vscode.DebugConfiguration = {
         name: `CVI Debug (GDB): ${ref.name}`,
         type: 'cppdbg',
@@ -581,43 +640,8 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         externalConsole: true,
         MIMode: 'gdb',
         miDebuggerPath: gdbPath,
-        setupCommands: [
-          {
-            description: 'Enable pretty-printing for gdb',
-            text: '-enable-pretty-printing',
-            ignoreFailures: true
-          },
-          {
-            description: 'Do not stop on DLL load/unload events',
-            text: 'set stop-on-solib-events 0',
-            ignoreFailures: true
-          },
-          {
-            description: 'Allow pending breakpoints for shared libraries',
-            text: 'set breakpoint pending on',
-            ignoreFailures: true
-          },
-          {
-            description: 'Disable thread creation/exit log spam',
-            text: 'set print thread-events off',
-            ignoreFailures: true
-          },
-          {
-            description: 'Disable kernel debug event noise',
-            text: 'set debugevents off',
-            ignoreFailures: true
-          },
-          {
-            description: 'Disable kernel exception event trapping on break',
-            text: 'set debugexceptions off',
-            ignoreFailures: true
-          },
-          {
-            description: 'Trap exit to evaluate true memory leaks',
-            text: 'break exit',
-            ignoreFailures: true
-          }
-        ]
+        cviMainRetAddr: mainRetAddr,
+        setupCommands
       };
 
       this.output.appendLine(`[CVI Debug] Prepared VS Code native debugging session (GDB) for ${executablePath}...`);

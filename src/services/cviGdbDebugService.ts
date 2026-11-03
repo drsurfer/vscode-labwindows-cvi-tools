@@ -140,6 +140,44 @@ export class CviGdbDebugService {
     }
   }
 
+  /**
+   * Disassembles main to find its return address (the 'ret' instruction),
+   * which serves as the precise exit breakpoint trap for resource leak detection.
+   */
+  async findMainReturnAddress(executablePath: string, gdbPath?: string): Promise<string | undefined> {
+    const resolvedGdb = gdbPath ?? await this.findGdb();
+    if (!resolvedGdb || !fs.existsSync(executablePath)) {
+      return undefined;
+    }
+
+    try {
+      const res = cp.spawnSync(resolvedGdb, ['-batch', '-ex', 'disassemble main', executablePath], {
+        windowsHide: true,
+        encoding: 'utf8',
+        timeout: 4000
+      });
+      if (res.status === 0 && res.stdout) {
+        const lines = res.stdout.split(/\r?\n/);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+          if (line.includes('ret')) {
+            const clean = line.replace('=>', '').trim();
+            const parts = clean.split(':');
+            if (parts.length > 0) {
+              const addr = parts[0].trim().split(/\s+/)[0];
+              if (addr && addr.startsWith('0x')) {
+                return addr;
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return undefined;
+  }
+
   private findExecutableInPath(exeName: string): string | undefined {
     try {
       const res = cp.spawnSync('where.exe', [exeName], { windowsHide: true, encoding: 'utf8' });
