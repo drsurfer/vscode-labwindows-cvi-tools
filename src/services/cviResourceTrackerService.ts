@@ -101,21 +101,22 @@ export class CviResourceTrackerService implements vscode.Disposable {
             onDidSendMessage: async (message: any) => {
               if (message.type === 'event' && message.event === 'stopped') {
                 const reason = message.body?.reason ?? 'breakpoint';
-                const description = String(message.body?.description || '').toLowerCase();
-                const text = String(message.body?.text || '').toLowerCase();
+                const threadId = message.body?.threadId ?? 1;
 
                 // Check if target stopped at exit
-                const isExit = description.includes('exit') || text.includes('exit');
-                if (isExit) {
-                  this.output.appendLine('[CVI Resources] Target reached process exit. Inspecting unreleased resources / leaks...');
-                  await this.refreshFromSession(session);
-                  this.exitSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
-                  try {
-                    await session.customRequest('continue', { threadId: message.body?.threadId ?? 1 });
-                  } catch {
-                    // ignore
+                try {
+                  const stackResp = await session.customRequest('stackTrace', { threadId, levels: 1 });
+                  const topFrame = stackResp?.stackFrames?.[0];
+                  const funcName = String(topFrame?.name || '').toLowerCase();
+                  if (funcName.includes('exit')) {
+                    this.output.appendLine(`[CVI Resources] Target reached ${topFrame.name}. Inspecting true leaks...`);
+                    await this.refreshFromSession(session);
+                    this.exitSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
+                    await session.customRequest('continue', { threadId });
+                    return;
                   }
-                  return;
+                } catch {
+                  // ignore
                 }
 
                 this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
@@ -249,38 +250,52 @@ export class CviResourceTrackerService implements vscode.Disposable {
    * Finalizes session upon program exit, checking if any resources were leaked.
    */
   private finalizeSession(): void {
-    if (this.currentSnapshot) {
-      const leakedItems = this.currentSnapshot.items.map((item) => ({ ...item, isLeaked: true }));
-      const hasLeaks = leakedItems.length > 0;
-
+    if (this.exitSnapshot && this.exitSnapshot.items.length > 0) {
+      const leakedItems = this.exitSnapshot.items.map((item) => ({ ...item, isLeaked: true }));
       this.lastSessionLeaks = {
-        ...this.currentSnapshot,
+        ...this.exitSnapshot,
         isActiveSession: false,
-        isCleanExit: !hasLeaks,
+        isCleanExit: false,
         items: leakedItems
       };
 
-      if (hasLeaks) {
-        this.output.appendLine(`[CVI Resources] ⚠️ Program terminated with ${leakedItems.length} unreleased resources (${formatBytes(this.lastSessionLeaks.totalBytes)}).`);
-        for (const item of leakedItems) {
-          const loc = item.sourceFile ? ` at ${path.basename(item.sourceFile)}:${item.lineNumber ?? 0}` : '';
-          this.output.appendLine(`  - [${item.typeLabel}] ${item.id}${loc} (${formatBytes(item.sizeBytes)})`);
-        }
-
-        const notify = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.notifyOnLeaks', true);
-        if (notify) {
-          void vscode.window.showWarningMessage(
-            `LabWindows/CVI: ${leakedItems.length} resource leak(s) detected (${formatBytes(this.lastSessionLeaks.totalBytes)}). Check the CVI Resource Tracking view.`,
-            'Open View'
-          ).then((action) => {
-            if (action === 'Open View') {
-              void vscode.commands.executeCommand('workbench.view.debug');
-            }
-          });
-        }
-      } else {
-        this.output.appendLine('[CVI Resources] ✅ Program terminated cleanly. No resource leaks detected.');
+      this.output.appendLine(`[CVI Resources] ⚠️ Program terminated with ${leakedItems.length} unreleased resources (${formatBytes(this.lastSessionLeaks.totalBytes)}).`);
+      for (const item of leakedItems) {
+        const varStr = item.variableName ? ` [${item.variableName}]` : '';
+        const loc = item.sourceFile ? ` at ${path.basename(item.sourceFile)}:${item.lineNumber ?? 0}` : '';
+        this.output.appendLine(`  - [${item.typeLabel}] ${item.id}${varStr}${loc} (${formatBytes(item.sizeBytes)})`);
       }
+
+      const notify = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.notifyOnLeaks', true);
+      if (notify) {
+        void vscode.window.showWarningMessage(
+          `LabWindows/CVI: ${leakedItems.length} resource leak(s) detected (${formatBytes(this.lastSessionLeaks.totalBytes)}). Check the CVI Resource Tracking view.`,
+          'Open View'
+        ).then((action) => {
+          if (action === 'Open View') {
+            void vscode.commands.executeCommand('workbench.view.debug');
+          }
+        });
+      }
+    } else {
+      // Normal termination: Clean exit, no leaks
+      this.lastSessionLeaks = {
+        timestamp: new Date(),
+        isActiveSession: false,
+        isCleanExit: true,
+        totalBytes: 0,
+        items: [],
+        summary: {
+          totalCount: 0,
+          memoryCount: 0,
+          uiCount: 0,
+          fileCount: 0,
+          threadCount: 0,
+          communicationCount: 0,
+          otherCount: 0
+        }
+      };
+      this.output.appendLine('[CVI Resources] ✅ Program terminated cleanly. No resource leaks detected.');
     }
 
     // Clean up temporary dump file
@@ -294,10 +309,11 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
     this.activeCviSession = null;
     this.currentSnapshot = null;
+    this.exitSnapshot = null;
     this._onDidChangeData.fire();
   }
 
-  clear(): void {
+    clear(): void {
     this.currentSnapshot = null;
     this.lastSessionLeaks = null;
     this._onDidChangeData.fire();
