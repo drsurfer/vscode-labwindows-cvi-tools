@@ -99,7 +99,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
           return {
             onDidSendMessage: (message: any) => {
               if (message.type === 'event' && message.event === 'stopped') {
-                // Program is paused on breakpoint or step
+                const reason = message.body?.reason ?? 'breakpoint';
+                this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
                 const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
                 if (autoRefresh) {
                   void this.refreshFromSession(session);
@@ -127,27 +128,70 @@ export class CviResourceTrackerService implements vscode.Disposable {
         this.dumpFilePath = path.join(os.tmpdir(), `cvi_res_dump_${Date.now()}.txt`);
       }
 
-      const normalizedDumpPath = this.dumpFilePath.replace(/\\/g, '/');
-
-      // Attempt to invoke the CVI runtime internal dump primitive (__CVI_Resource_DumpToFile)
-      // via GDB evaluate expression.
-      try {
-        await targetSession.customRequest('evaluate', {
-          expression: `-exec call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
-          context: 'repl'
-        });
-      } catch (err) {
-        // If the symbol is not in scope or program not built with extended debug, ignore silently
+      // Remove stale dump file if present
+      if (fs.existsSync(this.dumpFilePath)) {
+        try {
+          fs.unlinkSync(this.dumpFilePath);
+        } catch {
+          // ignore
+        }
       }
 
-      // Read dump file if generated
-      if (fs.existsSync(this.dumpFilePath)) {
+      const normalizedDumpPath = this.dumpFilePath.replace(/\\/g, '/');
+
+      // 1. Ensure runtime tracking is active in the CVI runtime
+      const activationCommands = [
+        '-exec call (void)__SetCurrentDebuggingLevel(3)',
+        '-exec call (int)SetEnableResourceTracking(1)'
+      ];
+      for (const cmd of activationCommands) {
+        try {
+          await targetSession.customRequest('evaluate', { expression: cmd, context: 'repl' });
+        } catch {
+          // ignore
+        }
+      }
+
+      // 2. Invoke __CVI_Resource_DumpToFile with various fallbacks
+      const dumpCommands = [
+        `-exec call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
+        `-exec p (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
+        `call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
+        `(int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`
+      ];
+
+      let dumpSuccess = false;
+      for (const cmd of dumpCommands) {
+        try {
+          const res = await targetSession.customRequest('evaluate', { expression: cmd, context: 'repl' });
+          this.output.appendLine(`[CVI Resources] Sent: ${cmd} -> Result: ${JSON.stringify(res)}`);
+
+          if (fs.existsSync(this.dumpFilePath)) {
+            const stat = fs.statSync(this.dumpFilePath);
+            this.output.appendLine(`[CVI Resources] Dump file generated: ${this.dumpFilePath} (${stat.size} bytes).`);
+            dumpSuccess = true;
+            break;
+          }
+        } catch (err: any) {
+          const msg = err?.message || String(err);
+          this.output.appendLine(`[CVI Resources] Command '${cmd}' failed: ${msg}`);
+        }
+      }
+
+      // 3. Read dump file if generated
+      if (dumpSuccess && fs.existsSync(this.dumpFilePath)) {
         const content = fs.readFileSync(this.dumpFilePath, 'utf8');
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         const parsed = parseResourceDump(content, workspaceRoot);
         parsed.sessionId = targetSession.id;
         parsed.isActiveSession = true;
         this.currentSnapshot = parsed;
+        this.output.appendLine(`[CVI Resources] Parsed ${parsed.items.length} active resource allocations (${formatBytes(parsed.totalBytes)}).`);
+      } else {
+        this.output.appendLine('[CVI Resources] No dump file was produced by CVI runtime. Verify that:');
+        this.output.appendLine('  1. Project Build Mode is set to Debug64 or Debug.');
+        this.output.appendLine('  2. Debugging Level is set to Extended.');
+        this.output.appendLine('  3. In code, SetEnableResourceTracking(1) is called (from <utility.h>).');
       }
     } catch (error) {
       this.output.appendLine(`[CVI Resources] Error querying resource tracker: ${error}`);
