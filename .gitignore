@@ -2,8 +2,9 @@
 out/
 dist/
 
-# Tools
+# Tools & NI libraries
 tools/
+ni/
 
 # Dependencies
 node_modules/
@@ -26,3 +27,6 @@ yarn-error.log*
 Thumbs.db
 *.bak
 *.tmp
+
+# Antigravity AI metadata
+antigravity/
