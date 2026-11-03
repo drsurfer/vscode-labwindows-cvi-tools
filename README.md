@@ -4,6 +4,16 @@ A Visual Studio Code extension to manage, build, and debug **National Instrument
 
 ---
 
+> ### Introduction
+>
+> This project was born as an experiment: to explore whether it is genuinely possible to create a modern, productive, and lightweight alternative to the native National Instruments LabWindows/CVI IDE within Visual Studio Code.
+>
+> This journey would never have started without discovering the outstanding work of **Jerry Crozet** (author of *JC Tools* / *JC Lib*), to whom we owe immense gratitude for paving the way and proving that modernizing the CVI developer experience was achievable.
+>
+> As this is our very first open-source project on GitHub, we don't know yet how far we will be able to go. What is certain is that embarking on this endeavour and bringing it to life would never have been possible without the assistance of modern AI engineering tools supporting us along the way.
+
+---
+
 ## Overview
 
 **LabWindows/CVI Tools** brings modern developer ergonomics to ANSI C development in NI LabWindows/CVI environments. It enables seamless workspace browsing, automated builds, compiler diagnostics, and integrated debugging without having to manually craft complex `tasks.json` or `launch.json` configurations.
