@@ -648,6 +648,7 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         externalConsole: true,
         MIMode: 'gdb',
         miDebuggerPath: gdbPath,
+        unknownBreakpointHandling: 'stop',
         setupCommands
       };
 
