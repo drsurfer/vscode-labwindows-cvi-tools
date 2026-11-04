@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -1740,6 +1740,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically query and update CVI resource tracking when paused at a breakpoint."
+        },
+        "labwindowsCvi.debug.breakOnRuntimeErrors": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically break execution in VS Code when LabWindows/CVI detects a runtime check error (uninitialized local variables, out-of-bounds array access, assertions) or library error, preventing external IDE invocation."
         },
         "labwindowsCvi.resourceTracking.notifyOnLeaks": {
           "type": "boolean",

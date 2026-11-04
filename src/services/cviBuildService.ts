@@ -625,6 +625,33 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         }
       ];
 
+      const breakOnRuntimeErrors = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('debug.breakOnRuntimeErrors', true);
+      if (breakOnRuntimeErrors) {
+        setupCommands.push(
+          {
+            description: 'Break in VS Code on CVI Run-time Errors (uninitialized locals, array bounds, assertions)',
+            text: 'break ReportUPError',
+            ignoreFailures: true
+          },
+          {
+            description: 'Break in VS Code on CVI Library Errors',
+            text: 'break _UPLibReportError',
+            ignoreFailures: true
+          },
+          {
+            description: 'Break in VS Code on CVI Library Breakpoints',
+            text: 'break _UPLibBreakpoint',
+            ignoreFailures: true
+          },
+          {
+            description: 'Break in VS Code on CVI Assertions',
+            text: 'break CVIAssert',
+            ignoreFailures: true
+          }
+        );
+        this.output.appendLine('[CVI Debug] Configured break interception for CVI runtime and library errors.');
+      }
+
       const debugConfig: vscode.DebugConfiguration = {
         name: `CVI Debug (GDB): ${ref.name}`,
         type: 'cppdbg',
