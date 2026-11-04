@@ -585,6 +585,15 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         gdbTrapScript += `break *${mainRetAddr}\ncommands\nsilent\ncall (int)__CVI_Resource_DumpToFile("${dumpPathNormalized}")\ncontinue\nend\n`;
       }
       gdbTrapScript += `break CloseCVIRTE\ncommands\nsilent\ncall (int)__CVI_Resource_DumpToFile("${dumpPathNormalized}")\ncontinue\nend\n`;
+
+      const breakOnRuntimeErrors = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('debug.breakOnRuntimeErrors', true);
+      if (breakOnRuntimeErrors) {
+        this.output.appendLine('[CVI Debug] Configured break interception for CVI runtime and library errors.');
+        gdbTrapScript += `break ReportUPError\ncommands\nsilent\nprintf "\\n================================================================================\\n [LABWINDOWS/CVI RUN-TIME CHECK ERROR]\\n Execution paused because a LabWindows/CVI Run-Time Check failed!\\n Offending line is highlighted in the VS Code editor.\\n Common causes:\\n   * Local variable referenced before being initialized\\n   * Array index or pointer out of bounds\\n   * Invalid pointer access detected by CVI runtime\\n Check Call Stack and Variables in VS Code to inspect the state.\\n================================================================================\\n\\n"\nend\n`;
+        gdbTrapScript += `break _UPLibReportError\ncommands\nsilent\nprintf "\\n================================================================================\\n [LABWINDOWS/CVI LIBRARY ERROR]\\n Execution paused: A LabWindows/CVI library function reported a run-time error.\\n Check Call Stack in VS Code to identify the library call.\\n================================================================================\\n\\n"\nend\n`;
+        gdbTrapScript += `break _UPLibBreakpoint\ncommands\nsilent\nprintf "\\n================================================================================\\n [LABWINDOWS/CVI BREAKPOINT]\\n Execution paused: Breakpoint() triggered from LabWindows/CVI code.\\n================================================================================\\n\\n"\nend\n`;
+        gdbTrapScript += `break CVIAssert\ncommands\nsilent\nprintf "\\n================================================================================\\n [LABWINDOWS/CVI ASSERTION FAILURE]\\n Execution paused: A LabWindows/CVI assertion (CVIAssert) failed.\\n Check the offending condition and Call Stack in VS Code.\\n================================================================================\\n\\n"\nend\n`;
+      }
       fs.writeFileSync(trapScriptPath, gdbTrapScript, 'utf8');
 
       const setupCommands: any[] = [
@@ -625,32 +634,7 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         }
       ];
 
-      const breakOnRuntimeErrors = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('debug.breakOnRuntimeErrors', true);
-      if (breakOnRuntimeErrors) {
-        setupCommands.push(
-          {
-            description: 'Break in VS Code on CVI Run-time Errors (uninitialized locals, array bounds, assertions)',
-            text: 'break ReportUPError',
-            ignoreFailures: true
-          },
-          {
-            description: 'Break in VS Code on CVI Library Errors',
-            text: 'break _UPLibReportError',
-            ignoreFailures: true
-          },
-          {
-            description: 'Break in VS Code on CVI Library Breakpoints',
-            text: 'break _UPLibBreakpoint',
-            ignoreFailures: true
-          },
-          {
-            description: 'Break in VS Code on CVI Assertions',
-            text: 'break CVIAssert',
-            ignoreFailures: true
-          }
-        );
-        this.output.appendLine('[CVI Debug] Configured break interception for CVI runtime and library errors.');
-      }
+
 
       const debugConfig: vscode.DebugConfiguration = {
         name: `CVI Debug (GDB): ${ref.name}`,

@@ -101,6 +101,21 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
           return {
             onDidSendMessage: async (message: any) => {
+              if (message.type === 'event' && message.event === 'output') {
+                const outText = message.body?.output ?? '';
+                if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
+                  this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Run-Time Check Error encountered! Execution paused.');
+                  void vscode.window.showWarningMessage('LabWindows/CVI Run-Time Check Error: Execution paused at failed run-time check (e.g. uninitialized variable or bounds check). See Debug Console and source line.');
+                } else if (outText.includes('[LABWINDOWS/CVI LIBRARY ERROR]')) {
+                  this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Library Error encountered! Execution paused.');
+                  void vscode.window.showWarningMessage('LabWindows/CVI Library Error: A library function reported an error. Check Call Stack in VS Code.');
+                } else if (outText.includes('[LABWINDOWS/CVI ASSERTION FAILURE]')) {
+                  this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Assertion Failed! Execution paused.');
+                  void vscode.window.showWarningMessage('LabWindows/CVI Assertion: CVIAssert() failed. Check Call Stack in VS Code.');
+                }
+                return;
+              }
+
               if (message.type === 'event' && message.event === 'exited') {
                 this.sessionExitedNaturally = true;
                 this.output.appendLine(`[CVI Resources] Target process exited naturally (code: ${message.body?.exitCode ?? 0}).`);
@@ -109,6 +124,9 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
               if (message.type === 'event' && message.event === 'stopped') {
                 const reason = message.body?.reason ?? 'breakpoint';
+                if (reason === 'exception' && typeof message.body?.description === 'string' && message.body.description.includes('breakpoint')) {
+                  message.body.description = 'LabWindows/CVI Run-Time Check Error: variable uninitialized, array bounds, or assertion check failed.';
+                }
                 this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
                 const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
                 if (autoRefresh) {
