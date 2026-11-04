@@ -103,7 +103,29 @@ export class CviResourceTrackerService implements vscode.Disposable {
           }
 
           return {
+            onWillReceiveMessage: (message: any) => {
+              if (message.type === 'request' && (
+                message.command === 'continue' ||
+                message.command === 'next' ||
+                message.command === 'stepIn' ||
+                message.command === 'stepOut' ||
+                message.command === 'restart' ||
+                message.command === 'disconnect'
+              )) {
+                this.hasPendingRuntimeError = false;
+                this.clearRuntimeErrorDecoration();
+              }
+            },
             onDidSendMessage: async (message: any) => {
+              if (message.type === 'response' && (
+                message.command === 'continue' ||
+                message.command === 'next' ||
+                message.command === 'stepIn' ||
+                message.command === 'stepOut'
+              )) {
+                this.hasPendingRuntimeError = false;
+                this.clearRuntimeErrorDecoration();
+              }
               if (message.type === 'event' && message.event === 'output') {
                 const outText = message.body?.output ?? '';
                 if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
@@ -445,6 +467,7 @@ export class CviResourceTrackerService implements vscode.Disposable {
           typeof f.name === 'string' && /ReportUPError|_UPLib|CVIAssert|_LocalsRuntimeCheck/i.test(f.name)
         );
         if (!isCviRuntimeStop) {
+          this.clearRuntimeErrorDecoration();
           return;
         }
 
