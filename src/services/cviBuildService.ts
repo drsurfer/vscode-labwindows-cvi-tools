@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
@@ -569,12 +570,22 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
       // Ensure DWARF symbols are enabled via objcopy
       await this.gdbService.enableDwarfSymbols(executablePath);
 
-      // Find return address of main for leak detection trap
+      // Clean up previous dump file
+      const dumpPathNormalized = path.join(os.tmpdir(), 'cvi_res_dump.txt').replace(/\\/g, '/');
+      const trapScriptPath = path.join(os.tmpdir(), 'cvi_gdb_exit_trap.gdb').replace(/\\/g, '/');
+      try {
+        if (fs.existsSync(dumpPathNormalized)) fs.unlinkSync(dumpPathNormalized);
+      } catch { /* ignore */ }
+
+      // Find return address of main for silent leak detection trap
       const mainRetAddr = await this.gdbService.findMainReturnAddress(executablePath, gdbPath);
-      
+      let gdbTrapScript = 'set breakpoint pending on\n';
       if (mainRetAddr) {
-        this.output.appendLine(`[CVI Debug] Configured exit trap breakpoint on main return at ${mainRetAddr}`);
+        this.output.appendLine(`[CVI Debug] Configured silent exit leak trap at main return: ${mainRetAddr}`);
+        gdbTrapScript += `break *${mainRetAddr}\ncommands\nsilent\ncall (int)__CVI_Resource_DumpToFile("${dumpPathNormalized}")\ncontinue\nend\n`;
       }
+      gdbTrapScript += `break CloseCVIRTE\ncommands\nsilent\ncall (int)__CVI_Resource_DumpToFile("${dumpPathNormalized}")\ncontinue\nend\n`;
+      fs.writeFileSync(trapScriptPath, gdbTrapScript, 'utf8');
 
       const setupCommands: any[] = [
         {
@@ -608,25 +619,11 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
           ignoreFailures: true
         },
         {
-          description: 'Trap exit at CloseCVIRTE if called',
-          text: 'break CloseCVIRTE',
+          description: 'Install silent exit resource trap',
+          text: `source ${trapScriptPath}`,
           ignoreFailures: true
         }
       ];
-
-      if (mainRetAddr) {
-        setupCommands.push({
-          description: 'Trap exit at main return to evaluate true memory leaks',
-          text: `break *${mainRetAddr}`,
-          ignoreFailures: true
-        });
-      } else {
-        setupCommands.push({
-          description: 'Trap exit to evaluate true memory leaks',
-          text: 'break exit',
-          ignoreFailures: true
-        });
-      }
 
       const debugConfig: vscode.DebugConfiguration = {
         name: `CVI Debug (GDB): ${ref.name}`,
@@ -640,7 +637,6 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
         externalConsole: true,
         MIMode: 'gdb',
         miDebuggerPath: gdbPath,
-        cviMainRetAddr: mainRetAddr,
         setupCommands
       };
 

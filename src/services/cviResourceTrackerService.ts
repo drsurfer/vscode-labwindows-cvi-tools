@@ -15,20 +15,7 @@ export class CviResourceTrackerService implements vscode.Disposable {
   private dumpFilePath: string | null = null;
   private disposables: vscode.Disposable[] = [];
   private isRefreshing = false;
-  private exitBreakpointAddress?: string;
-
-  setExitBreakpointAddress(address: string | undefined): void {
-    this.exitBreakpointAddress = address;
-    this.output.appendLine(`[CVI Resources] Exit trap configured for instruction address: ${address || 'none'}`);
-  }
-
-  private matchesAddress(a: string, b: string): boolean {
-    try {
-      return BigInt(a) === BigInt(b);
-    } catch {
-      return a.toLowerCase() === b.toLowerCase();
-    }
-  }
+  private sessionExitedNaturally = false;
 
   constructor(
     private readonly output: vscode.OutputChannel
@@ -69,7 +56,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
         }
         this.activeCviSession = session;
         this.lastSessionLeaks = null;
-        this.dumpFilePath = path.join(os.tmpdir(), `cvi_res_dump_${Date.now()}.txt`);
+        this.dumpFilePath = path.join(os.tmpdir(), 'cvi_res_dump.txt');
+        this.sessionExitedNaturally = false;
 
         this.currentSnapshot = {
           sessionId: session.id,
@@ -113,33 +101,14 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
           return {
             onDidSendMessage: async (message: any) => {
+              if (message.type === 'event' && message.event === 'exited') {
+                this.sessionExitedNaturally = true;
+                this.output.appendLine(`[CVI Resources] Target process exited naturally (code: ${message.body?.exitCode ?? 0}).`);
+                return;
+              }
+
               if (message.type === 'event' && message.event === 'stopped') {
                 const reason = message.body?.reason ?? 'breakpoint';
-                const threadId = message.body?.threadId ?? 1;
-
-                // Check if target stopped at exit
-                try {
-                  const stackResp = await session.customRequest('stackTrace', { threadId, levels: 1 });
-                  const topFrame = stackResp?.stackFrames?.[0];
-                  const funcName = String(topFrame?.name || '').toLowerCase();
-                  const ipRef = String(topFrame?.instructionPointerReference || '');
-
-                  const isExitTrap =
-                    funcName.includes('exit') ||
-                    funcName.includes('closecvirte') ||
-                    (!!this.exitBreakpointAddress && !!ipRef && this.matchesAddress(ipRef, this.exitBreakpointAddress));
-
-                  if (isExitTrap) {
-                    this.output.appendLine(`[CVI Resources] Target reached exit trap (${topFrame?.name || ''} at ${ipRef}). Inspecting true leaks...`);
-                    await this.refreshFromSession(session);
-                    this.exitSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
-                    await session.customRequest('continue', { threadId });
-                    return;
-                  }
-                } catch {
-                  // ignore
-                }
-
                 this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
                 const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
                 if (autoRefresh) {
@@ -165,7 +134,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
     this.isRefreshing = true;
     try {
       if (!this.dumpFilePath) {
-        this.dumpFilePath = path.join(os.tmpdir(), `cvi_res_dump_${Date.now()}.txt`);
+        this.dumpFilePath = path.join(os.tmpdir(), 'cvi_res_dump.txt');
+        this.sessionExitedNaturally = false;
       }
 
       // Remove stale dump file if present
@@ -271,35 +241,83 @@ export class CviResourceTrackerService implements vscode.Disposable {
    * Finalizes session upon program exit, checking if any resources were leaked.
    */
   private finalizeSession(): void {
-    if (this.exitSnapshot && this.exitSnapshot.items.length > 0) {
-      const leakedItems = this.exitSnapshot.items.map((item) => ({ ...item, isLeaked: true }));
-      this.lastSessionLeaks = {
-        ...this.exitSnapshot,
-        isActiveSession: false,
-        isCleanExit: false,
-        items: leakedItems
-      };
-
-      this.output.appendLine(`[CVI Resources] ⚠️ Program terminated with ${leakedItems.length} unreleased resources (${formatBytes(this.lastSessionLeaks.totalBytes)}).`);
-      for (const item of leakedItems) {
-        const varStr = item.variableName ? ` [${item.variableName}]` : '';
-        const loc = item.sourceFile ? ` at ${path.basename(item.sourceFile)}:${item.lineNumber ?? 0}` : '';
-        this.output.appendLine(`  - [${item.typeLabel}] ${item.id}${varStr}${loc} (${formatBytes(item.sizeBytes)})`);
+    const dumpFile = this.dumpFilePath ?? path.join(os.tmpdir(), 'cvi_res_dump.txt');
+    if (this.sessionExitedNaturally && fs.existsSync(dumpFile)) {
+      const content = fs.readFileSync(dumpFile, 'utf8');
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      let defaultSourceFile = vscode.window.activeTextEditor?.document.fileName;
+      if (!defaultSourceFile && workspaceRoot) {
+        try {
+          const findC = (dir: string): string | undefined => {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const e of entries) {
+              if (e.isFile() && e.name.endsWith('.c') && !e.name.startsWith('.')) {
+                return path.join(dir, e.name);
+              }
+              if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules' && e.name !== '.git') {
+                const sub = findC(path.join(dir, e.name));
+                if (sub) {
+                  return sub;
+                }
+              }
+            }
+            return undefined;
+          };
+          defaultSourceFile = findC(workspaceRoot);
+        } catch {
+          // ignore
+        }
       }
+      const parsed = parseResourceDump(content, workspaceRoot, defaultSourceFile);
+      if (parsed.items.length > 0) {
+        const leakedItems = parsed.items.map((item) => ({ ...item, isLeaked: true }));
+        this.lastSessionLeaks = {
+          ...parsed,
+          isActiveSession: false,
+          isCleanExit: false,
+          items: leakedItems
+        };
 
-      const notify = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.notifyOnLeaks', true);
-      if (notify) {
-        void vscode.window.showWarningMessage(
-          `LabWindows/CVI: ${leakedItems.length} resource leak(s) detected (${formatBytes(this.lastSessionLeaks.totalBytes)}). Check the CVI Resource Tracking view.`,
-          'Open View'
-        ).then((action) => {
-          if (action === 'Open View') {
-            void vscode.commands.executeCommand('workbench.view.debug');
+        this.output.appendLine(`[CVI Resources] ⚠️ Program terminated with ${leakedItems.length} unreleased resources (${formatBytes(this.lastSessionLeaks.totalBytes)}).`);
+        for (const item of leakedItems) {
+          const varStr = item.variableName ? ` [${item.variableName}]` : '';
+          const loc = item.sourceFile ? ` at ${path.basename(item.sourceFile)}:${item.lineNumber ?? 0}` : '';
+          this.output.appendLine(`  - [${item.typeLabel}] ${item.id}${varStr}${loc} (${formatBytes(item.sizeBytes)})`);
+        }
+
+        const notify = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.notifyOnLeaks', true);
+        if (notify) {
+          void vscode.window.showWarningMessage(
+            `LabWindows/CVI: ${leakedItems.length} resource leak(s) detected (${formatBytes(this.lastSessionLeaks.totalBytes)}). Check the CVI Resource Tracking view.`,
+            'Open View'
+          ).then((action) => {
+            if (action === 'Open View') {
+              void vscode.commands.executeCommand('workbench.view.debug');
+            }
+          });
+        }
+      } else {
+        // Normal termination: Clean exit, no leaks
+        this.lastSessionLeaks = {
+          timestamp: new Date(),
+          isActiveSession: false,
+          isCleanExit: true,
+          totalBytes: 0,
+          items: [],
+          summary: {
+            totalCount: 0,
+            memoryCount: 0,
+            uiCount: 0,
+            fileCount: 0,
+            threadCount: 0,
+            communicationCount: 0,
+            otherCount: 0
           }
-        });
+        };
+        this.output.appendLine('[CVI Resources] ✅ Program terminated cleanly. No resource leaks detected.');
       }
     } else {
-      // Normal termination: Clean exit, no leaks
+      // Normal termination without leaks or session aborted by user
       this.lastSessionLeaks = {
         timestamp: new Date(),
         isActiveSession: false,
@@ -316,7 +334,11 @@ export class CviResourceTrackerService implements vscode.Disposable {
           otherCount: 0
         }
       };
-      this.output.appendLine('[CVI Resources] ✅ Program terminated cleanly. No resource leaks detected.');
+      if (this.sessionExitedNaturally) {
+        this.output.appendLine('[CVI Resources] ✅ Program terminated cleanly. No resource leaks detected.');
+      } else {
+        this.output.appendLine('[CVI Resources] Debug session ended.');
+      }
     }
 
     // Clean up temporary dump file
@@ -330,11 +352,10 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
     this.activeCviSession = null;
     this.currentSnapshot = null;
-    this.exitSnapshot = null;
     this._onDidChangeData.fire();
   }
 
-    clear(): void {
+  clear(): void {
     this.currentSnapshot = null;
     this.lastSessionLeaks = null;
     this._onDidChangeData.fire();
