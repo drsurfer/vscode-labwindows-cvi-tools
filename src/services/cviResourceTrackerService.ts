@@ -16,6 +16,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
   private isRefreshing = false;
   private sessionExitedNaturally = false;
+  private runtimeErrorDecorationType?: vscode.TextEditorDecorationType;
+  private hasPendingRuntimeError = false;
 
   constructor(
     private readonly output: vscode.OutputChannel
@@ -87,6 +89,7 @@ export class CviResourceTrackerService implements vscode.Disposable {
         if (this.activeCviSession?.id !== session.id) {
           return;
         }
+        this.clearRuntimeErrorDecoration();
         this.finalizeSession();
       })
     );
@@ -104,19 +107,30 @@ export class CviResourceTrackerService implements vscode.Disposable {
               if (message.type === 'event' && message.event === 'output') {
                 const outText = message.body?.output ?? '';
                 if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
+                  this.hasPendingRuntimeError = true;
                   this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Run-Time Check Error encountered! Execution paused.');
                   void vscode.window.showWarningMessage('LabWindows/CVI Run-Time Check Error: Execution paused at failed run-time check (e.g. uninitialized variable or bounds check). See Debug Console and source line.');
                 } else if (outText.includes('[LABWINDOWS/CVI LIBRARY ERROR]')) {
+                  this.hasPendingRuntimeError = true;
                   this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Library Error encountered! Execution paused.');
                   void vscode.window.showWarningMessage('LabWindows/CVI Library Error: A library function reported an error. Check Call Stack in VS Code.');
                 } else if (outText.includes('[LABWINDOWS/CVI ASSERTION FAILURE]')) {
+                  this.hasPendingRuntimeError = true;
                   this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Assertion Failed! Execution paused.');
                   void vscode.window.showWarningMessage('LabWindows/CVI Assertion: CVIAssert() failed. Check Call Stack in VS Code.');
                 }
                 return;
               }
 
+              if (message.type === 'event' && message.event === 'continued') {
+                this.hasPendingRuntimeError = false;
+                this.clearRuntimeErrorDecoration();
+                return;
+              }
+
               if (message.type === 'event' && message.event === 'exited') {
+                this.hasPendingRuntimeError = false;
+                this.clearRuntimeErrorDecoration();
                 this.sessionExitedNaturally = true;
                 this.output.appendLine(`[CVI Resources] Target process exited naturally (code: ${message.body?.exitCode ?? 0}).`);
                 return;
@@ -128,6 +142,10 @@ export class CviResourceTrackerService implements vscode.Disposable {
                   message.body.description = 'LabWindows/CVI Run-Time Check Error: variable uninitialized, array bounds, or assertion check failed.';
                 }
                 this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
+
+                // Highlight offending source line if stopped at CVI runtime error
+                void this.highlightErrorLineFromSession(session, message.body?.threadId ?? 1);
+
                 const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
                 if (autoRefresh) {
                   void this.refreshFromSession(session);
@@ -418,7 +436,79 @@ export class CviResourceTrackerService implements vscode.Disposable {
     await vscode.window.showTextDocument(doc);
   }
 
+  private async highlightErrorLineFromSession(session: vscode.DebugSession, threadId: number): Promise<void> {
+    try {
+      const trace = await session.customRequest('stackTrace', { threadId, levels: 10 });
+      if (trace?.stackFrames && Array.isArray(trace.stackFrames)) {
+        // Detect if this stop is caused by CVI runtime checks or library errors
+        const isCviRuntimeStop = this.hasPendingRuntimeError || trace.stackFrames.some((f: any) =>
+          typeof f.name === 'string' && /ReportUPError|_UPLib|CVIAssert|_LocalsRuntimeCheck/i.test(f.name)
+        );
+        if (!isCviRuntimeStop) {
+          return;
+        }
+
+        // Find the first frame that belongs to user code (existing source file path)
+        const userFrame = trace.stackFrames.find((f: any) =>
+          f.source?.path && fs.existsSync(f.source.path) && typeof f.line === 'number' && f.line > 0
+        );
+
+        if (userFrame) {
+          await this.highlightOffendingLine(userFrame.source.path, userFrame.line);
+        }
+      }
+    } catch (err) {
+      this.output.appendLine(`[CVI Runtime] Could not determine offending line: ${String(err)}`);
+    }
+  }
+
+  private async highlightOffendingLine(filePath: string, lineNumber: number): Promise<void> {
+    try {
+      const doc = await vscode.workspace.openTextDocument(filePath);
+      const editor = await vscode.window.showTextDocument(doc, { preserveFocus: false, preview: false });
+      const lineIdx = Math.max(0, lineNumber - 1);
+      const lineRange = doc.lineAt(lineIdx).range;
+
+      if (!this.runtimeErrorDecorationType) {
+        this.runtimeErrorDecorationType = vscode.window.createTextEditorDecorationType({
+          backgroundColor: 'rgba(255, 68, 68, 0.25)',
+          isWholeLine: true,
+          border: '1px solid rgba(255, 68, 68, 0.7)',
+          overviewRulerColor: '#ff4444',
+          overviewRulerLane: vscode.OverviewRulerLane.Full,
+          after: {
+            contentText: '   ⚠️ [LabWindows/CVI Run-Time Error Check Failed]',
+            color: '#ff6b6b',
+            fontWeight: 'bold',
+            fontStyle: 'italic'
+          }
+        });
+      }
+
+      editor.setDecorations(this.runtimeErrorDecorationType, [
+        {
+          range: lineRange,
+          hoverMessage: new vscode.MarkdownString('**LabWindows/CVI Run-Time Error**\n\nExecution paused at this line because a CVI Run-time check failed (e.g. uninitialized local variable, array bounds violation, or assertion).')
+        }
+      ]);
+      editor.revealRange(lineRange, vscode.TextEditorRevealType.InCenter);
+      this.output.appendLine(`[CVI Runtime] Highlighted offending source line: ${path.basename(filePath)}:${lineNumber}`);
+    } catch (err) {
+      this.output.appendLine(`[CVI Runtime] Error opening document for error line highlight: ${String(err)}`);
+    }
+  }
+
+  private clearRuntimeErrorDecoration(): void {
+    if (this.runtimeErrorDecorationType) {
+      for (const editor of vscode.window.visibleTextEditors) {
+        editor.setDecorations(this.runtimeErrorDecorationType, []);
+      }
+    }
+  }
+
   dispose(): void {
+    this.clearRuntimeErrorDecoration();
+    this.runtimeErrorDecorationType?.dispose();
     this.finalizeSession();
     for (const d of this.disposables) {
       d.dispose();
