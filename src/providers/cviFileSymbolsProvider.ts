@@ -19,6 +19,8 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
   private view?: vscode.TreeView<FileSymbolNode>;
   private sortMode: 'position' | 'name' | 'category' = 'position';
   private followCursor = true;
+  private filterText = '';
+  private filterOnType = false;
 
   constructor(private readonly symbols: CviSymbolService) {}
 
@@ -63,6 +65,68 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     this.followCursor = enabled;
   }
 
+  getFilterText(): string {
+    return this.filterText;
+  }
+
+  isFilterOnType(): boolean {
+    return this.filterOnType;
+  }
+
+  setFilterText(text: string): void {
+    this.filterText = text.trim();
+    this.updateDescription();
+    this.refresh();
+  }
+
+  async toggleFilterOnType(): Promise<void> {
+    if (this.filterOnType) {
+      this.filterOnType = false;
+      this.filterText = '';
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', false);
+      this.updateDescription();
+      this.refresh();
+      void vscode.window.setStatusBarMessage('Outline: filter cleared', 1500);
+      return;
+    }
+
+    const inputBox = vscode.window.createInputBox();
+    inputBox.title = 'Outline: Filter on Type';
+    inputBox.placeholder = 'Type to filter symbols (e.g. panelCB, main, static)...';
+    inputBox.value = this.filterText;
+
+    inputBox.onDidChangeValue((value) => {
+      this.setFilterText(value);
+    });
+
+    inputBox.onDidAccept(() => {
+      const val = inputBox.value.trim();
+      if (val) {
+        this.filterOnType = true;
+        this.setFilterText(val);
+        void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', true);
+      } else {
+        this.filterOnType = false;
+        this.setFilterText('');
+        void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', false);
+      }
+      inputBox.dispose();
+    });
+
+    inputBox.onDidHide(() => {
+      if (this.filterText) {
+        this.filterOnType = true;
+        void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', true);
+      } else {
+        this.filterOnType = false;
+        void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', false);
+      }
+      inputBox.dispose();
+    });
+
+    inputBox.show();
+  }
+
   getParent(_element: FileSymbolNode): vscode.ProviderResult<FileSymbolNode> {
     return undefined;
   }
@@ -73,7 +137,7 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
 
   async reveal(symbol: CviSourceSymbol): Promise<void> {
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(symbol.filePath));
-    const editor = await vscode.window.showTextDocument(document, { preview: false });
+    const editor = await vscode.window.showTextDocument(document, { preview: true, preserveFocus: true });
     const position = new vscode.Position(symbol.line, symbol.character);
     editor.selection = new vscode.Selection(position, position);
     editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
@@ -271,7 +335,19 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
       return [{ kind: 'placeholder', label: 'No symbols found in the selected file.' }];
     }
 
-    const sorted = [...symbols];
+    let result = symbols;
+    if (this.filterText) {
+      const query = this.filterText.toLowerCase();
+      result = symbols.filter((s) =>
+        (s.label || s.name).toLowerCase().includes(query) ||
+        (s.signature && s.signature.toLowerCase().includes(query))
+      );
+      if (!result.length) {
+        return [{ kind: 'placeholder', label: `No symbols match "${this.filterText}".` }];
+      }
+    }
+
+    const sorted = [...result];
     if (this.sortMode === 'name') {
       sorted.sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name) || a.line - b.line);
     } else if (this.sortMode === 'category') {
@@ -291,7 +367,8 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
 
   private updateDescription(): void {
     if (this.view) {
-      this.view.description = this.selectedFile ? path.basename(this.selectedFile) : 'No file selected';
+      const base = this.selectedFile ? path.basename(this.selectedFile) : 'No file selected';
+      this.view.description = this.filterText ? `${base} (filter: "${this.filterText}")` : base;
     }
   }
 }

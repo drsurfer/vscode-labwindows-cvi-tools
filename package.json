@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -710,8 +710,28 @@
         "category": "LabWindows/CVI"
       },
       {
+        "command": "labwindowsCvi.outline.toggleFollowCursorOn",
+        "title": "✓ Follow Cursor",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.toggleFilterOnType",
+        "title": "Filter on Type",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.toggleFilterOnTypeOn",
+        "title": "✓ Filter on Type",
+        "category": "LabWindows/CVI"
+      },
+      {
         "command": "labwindowsCvi.outline.sortByPosition",
         "title": "Sort By: Position",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.sortByPositionOn",
+        "title": "✓ Sort By: Position",
         "category": "LabWindows/CVI"
       },
       {
@@ -720,8 +740,18 @@
         "category": "LabWindows/CVI"
       },
       {
+        "command": "labwindowsCvi.outline.sortByNameOn",
+        "title": "✓ Sort By: Name",
+        "category": "LabWindows/CVI"
+      },
+      {
         "command": "labwindowsCvi.outline.sortByCategory",
         "title": "Sort By: Category",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.sortByCategoryOn",
+        "title": "✓ Sort By: Category",
         "category": "LabWindows/CVI"
       },
       {
@@ -882,28 +912,54 @@
           "group": "navigation@5"
         },
         {
+          "command": "labwindowsCvi.outline.toggleFollowCursorOn",
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineFollowCursor",
+          "group": "1_outline_options@1"
+        },
+        {
           "command": "labwindowsCvi.outline.toggleFollowCursor",
-          "when": "view == labwindowsCvi.fileSymbols",
-          "group": "1_outline_options@1",
-          "toggled": "labwindowsCvi.outlineFollowCursor"
+          "when": "view == labwindowsCvi.fileSymbols && !labwindowsCvi.outlineFollowCursor",
+          "group": "1_outline_options@1"
+        },
+        {
+          "command": "labwindowsCvi.outline.toggleFilterOnTypeOn",
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineFilterOnType",
+          "group": "1_outline_options@2"
+        },
+        {
+          "command": "labwindowsCvi.outline.toggleFilterOnType",
+          "when": "view == labwindowsCvi.fileSymbols && !labwindowsCvi.outlineFilterOnType",
+          "group": "1_outline_options@2"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByPositionOn",
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode == 'position'",
+          "group": "2_outline_sort@1"
         },
         {
           "command": "labwindowsCvi.outline.sortByPosition",
-          "when": "view == labwindowsCvi.fileSymbols",
-          "group": "2_outline_sort@1",
-          "toggled": "labwindowsCvi.outlineSortMode == position"
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode != 'position'",
+          "group": "2_outline_sort@1"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByNameOn",
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode == 'name'",
+          "group": "2_outline_sort@2"
         },
         {
           "command": "labwindowsCvi.outline.sortByName",
-          "when": "view == labwindowsCvi.fileSymbols",
-          "group": "2_outline_sort@2",
-          "toggled": "labwindowsCvi.outlineSortMode == name"
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode != 'name'",
+          "group": "2_outline_sort@2"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByCategoryOn",
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode == 'category'",
+          "group": "2_outline_sort@3"
         },
         {
           "command": "labwindowsCvi.outline.sortByCategory",
-          "when": "view == labwindowsCvi.fileSymbols",
-          "group": "2_outline_sort@3",
-          "toggled": "labwindowsCvi.outlineSortMode == category"
+          "when": "view == labwindowsCvi.fileSymbols && labwindowsCvi.outlineSortMode != 'category'",
+          "group": "2_outline_sort@3"
         },
         {
           "command": "labwindowsCvi.refreshResourceTracking",

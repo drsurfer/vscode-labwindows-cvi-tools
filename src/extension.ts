@@ -73,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   );
   void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFollowCursor', true);
+  void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', false);
   void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
   const home = new HomePanel(context, workspaces, builds, installations);
   const buildSettings = new BuildSettingsPanel(workspaces, parser, projectSettings);
@@ -281,7 +282,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       fileSymbolsProvider.setFollowCursor(next);
       void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFollowCursor', next);
     }),
+    register('labwindowsCvi.outline.toggleFollowCursorOn', () => {
+      const next = !fileSymbolsProvider.isFollowCursor();
+      fileSymbolsProvider.setFollowCursor(next);
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFollowCursor', next);
+    }),
+    register('labwindowsCvi.outline.toggleFilterOnType', () => fileSymbolsProvider.toggleFilterOnType()),
+    register('labwindowsCvi.outline.toggleFilterOnTypeOn', () => fileSymbolsProvider.toggleFilterOnType()),
     register('labwindowsCvi.outline.sortByPosition', () => {
+      fileSymbolsProvider.setSortMode('position');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
+    }),
+    register('labwindowsCvi.outline.sortByPositionOn', () => {
       fileSymbolsProvider.setSortMode('position');
       void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
     }),
@@ -289,7 +301,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       fileSymbolsProvider.setSortMode('name');
       void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'name');
     }),
+    register('labwindowsCvi.outline.sortByNameOn', () => {
+      fileSymbolsProvider.setSortMode('name');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'name');
+    }),
     register('labwindowsCvi.outline.sortByCategory', () => {
+      fileSymbolsProvider.setSortMode('category');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'category');
+    }),
+    register('labwindowsCvi.outline.sortByCategoryOn', () => {
       fileSymbolsProvider.setSortMode('category');
       void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'category');
     }),

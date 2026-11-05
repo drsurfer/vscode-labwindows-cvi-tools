@@ -178,6 +178,20 @@ try {
       throw new Error(`Expected panelCB to appear exactly once in generated header, found ${panelCBMatches}`);
     }
 
+    console.log('\n--- 5. Testing Filter on Type ---');
+    provider.setFilterText('cb');
+    const filteredCb = await provider.getChildren();
+    console.log('Filtered by "cb":', filteredCb.map(s => s.label));
+    if (filteredCb.length !== 2 || !filteredCb.every(s => s.name === 'panelCB')) {
+      throw new Error(`Expected only 2 panelCB items when filtered by "cb", got ${filteredCb.length}`);
+    }
+    provider.setFilterText('');
+    const restored = await provider.getChildren();
+    if (restored.length !== 5) {
+      throw new Error(`Expected all 5 items restored when filter cleared, got ${restored.length}`);
+    }
+    console.log('Filter on Type tests passed!');
+
     console.log('\n--- All tests PASSED successfully! ---');
   })().catch(err => {
     console.error('Async test error:', err);

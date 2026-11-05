@@ -2,6 +2,15 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.13] - 2026-11-05
+
+### Added
+- **Explicit Checkmarks for Outline Settings**:
+  - Added visible checkmark symbols (`✓`) for active states in the Outline menu (`✓ Follow Cursor`, `✓ Filter on Type`, `✓ Sort By: ...`).
+- **Outline Filter on Type & Focus Preservation**:
+  - Added dedicated **Filter on Type** interactive filtering action allowing real-time symbol search.
+  - Configured symbol selection with `preserveFocus: true` so clicking an outline item reveals the code without moving keyboard focus away from the Outline view into the editor.
+
 ## [0.0.12] - 2026-11-05
 
 ### Added
