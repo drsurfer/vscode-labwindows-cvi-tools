@@ -2,6 +2,19 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.12] - 2026-11-05
+
+### Added
+- **Outline View (PlatformIO Style)**:
+  - Renamed "CVI File Symbols" view to **Outline**.
+  - Extracted `#define` preprocessor macros with dedicated constant/macro icon.
+  - Extracted global and file-static variables outside function bodies with variable icon.
+  - Compact parameter type formatting (e.g. `panelCB(int, int, void *, int, int)` and `main(int, char * [])`).
+  - Distinct `declaration` description tag for function prototypes.
+  - Added **Follow Cursor** mode synchronizing outline selection with active editor cursor position.
+  - Added **Sort By** options: Position (file order), Name (A-Z), and Category (Macros -> Variables -> Functions).
+  - Registered `DocumentSymbolProvider` for C/C++ files, activating native VS Code Outline with integrated **Filter on Type**.
+
 ## [0.0.2] - 2026-11-02
 
 ### Added

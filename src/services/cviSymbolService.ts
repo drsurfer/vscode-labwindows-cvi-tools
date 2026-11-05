@@ -6,6 +6,7 @@ import { CviWorkspaceService } from './cviWorkspaceService';
 export interface CviSourceSymbol {
   name: string;
   qualifiedName?: string;
+  label?: string;
   signature: string;
   declaration?: string;
   filePath: string;
@@ -13,6 +14,8 @@ export interface CviSourceSymbol {
   character: number;
   kind: vscode.SymbolKind;
   source: 'document' | 'fallback';
+  isDeclaration?: boolean;
+  isDefinition?: boolean;
 }
 
 export interface CviCompletionSymbol {
@@ -36,10 +39,6 @@ export class CviSymbolService {
       return [];
     }
 
-    // Keep this view independent from cpptools/LSP document symbols. Some
-    // providers report macros or call expressions as symbols. The local scanner
-    // below only keeps top-level declarations/definitions and skips matches
-    // located inside already-detected function bodies.
     return scanCFunctions(fs.readFileSync(filePath, 'utf8'), filePath);
   }
 
@@ -179,12 +178,170 @@ function collectPackFunctions(value: unknown, result: CviCompletionSymbol[]): vo
   Object.values(record).forEach((entry) => collectPackFunctions(entry, result));
 }
 
+export function formatCompactFunctionLabel(name: string, rawParams: string): string {
+  const trimmed = rawParams.trim();
+  if (!trimmed) {
+    return `${name}()`;
+  }
+  if (trimmed === 'void') {
+    return `${name}(void)`;
+  }
+  const parts: string[] = [];
+  let current = '';
+  let paren = 0;
+  let bracket = 0;
+  let brace = 0;
+  let angle = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === '(') paren++;
+    else if (ch === ')') paren = Math.max(0, paren - 1);
+    else if (ch === '[') bracket++;
+    else if (ch === ']') bracket = Math.max(0, bracket - 1);
+    else if (ch === '{') brace++;
+    else if (ch === '}') brace = Math.max(0, brace - 1);
+    else if (ch === '<') angle++;
+    else if (ch === '>') angle = Math.max(0, angle - 1);
+
+    if (ch === ',' && paren === 0 && bracket === 0 && brace === 0 && angle === 0) {
+      parts.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  const formattedParams = parts.map((p) => {
+    let s = p.trim().replace(/=.*$/, '').trim();
+    const arrayMatch = s.match(/\[[^\]]*\]/g);
+    const arraySuffix = arrayMatch ? ' ' + arrayMatch.join('') : '';
+    s = s.replace(/\[[^\]]*\]/g, '').trim();
+
+    if (/[\*&]\s*[A-Za-z_]\w*$/.test(s)) {
+      s = s.replace(/([*&]+)\s*[A-Za-z_]\w*$/, '$1').trim();
+      s = s.replace(/(\w)(\*+)/, '$1 $2');
+      return s + arraySuffix;
+    }
+
+    const tokens = s.split(/\s+/);
+    if (tokens.length > 1) {
+      const lastToken = tokens[tokens.length - 1];
+      if (/^[A-Za-z_]\w*$/.test(lastToken)) {
+        tokens.pop();
+        return tokens.join(' ') + arraySuffix;
+      }
+    }
+    return s + arraySuffix;
+  }).join(', ');
+
+  return `${name}(${formattedParams})`;
+}
+
 export function scanCFunctions(source: string, filePath: string): CviSourceSymbol[] {
   const masked = maskCommentsAndStrings(source);
   const functionBodyRanges = [...collectFunctionBodyRanges(masked), ...collectScopedConstructorBodyRanges(masked)];
   const result: CviSourceSymbol[] = [];
-  const controlOrStatementPrefixes = /^(?:return|co_return|throw|emit|case|else|do|goto|break|continue|new|delete|using|typedef|static_assert)\b/;
 
+  // 1. Scan #define macros
+  const definePattern = /(^|\n)\s*#\s*define\s+([A-Za-z_]\w*)(?:\(([^)]*)\))?/gm;
+  let defMatch: RegExpExecArray | null;
+  while ((defMatch = definePattern.exec(masked)) !== null) {
+    const macroName = defMatch[2];
+    const params = defMatch[3] !== undefined ? `(${defMatch[3].trim()})` : '';
+    const nameOffset = defMatch.index + defMatch[0].lastIndexOf(macroName);
+    const before = source.slice(0, nameOffset);
+    const line = before.split('\n').length - 1;
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const character = nameOffset - lineStart;
+    const lineEnd = source.indexOf('\n', defMatch.index + 1);
+    const fullLine = source.slice(defMatch.index + defMatch[1].length, lineEnd > 0 ? lineEnd : undefined).trim();
+
+    result.push({
+      name: macroName,
+      qualifiedName: macroName,
+      label: `${macroName}${params}`,
+      signature: fullLine,
+      declaration: fullLine,
+      filePath,
+      line,
+      character,
+      kind: vscode.SymbolKind.Constant,
+      source: 'fallback'
+    });
+  }
+
+  // 2. Scan global / file-static variables (outside function bodies)
+  const varDeclPattern = /(^|\n)\s*((?:(?:static|extern|const|volatile)\s+)*(?:(?:unsigned|signed)\s+)?(?:struct\s+\w+|enum\s+\w+|union\s+\w+|void|char|short|int|long|float|double|[A-Za-z_]\w*)\s+((?:[*&]\s*)*\b([A-Za-z_]\w*)\b\s*(?:\[[^\]]*\])*\s*(?:=\s*[^;,]+)?(?:\s*,\s*(?:[*&]\s*)*\b([A-Za-z_]\w*)\b\s*(?:\[[^\]]*\])*\s*(?:=\s*[^;,]+)?)*)\s*;)/gm;
+  let varMatch: RegExpExecArray | null;
+  while ((varMatch = varDeclPattern.exec(masked)) !== null) {
+    const offset = varMatch.index;
+    if (isOffsetInsideRanges(offset, functionBodyRanges)) continue;
+    const fullDecl = varMatch[2].trim();
+    if (/^(?:typedef|return|goto|break|continue|#)\b/.test(fullDecl)) continue;
+    if (fullDecl.includes('(')) continue;
+
+    const clean = fullDecl.replace(/;\s*$/, '').trim();
+    const withoutStorage = clean.replace(/^(?:(?:static|extern|const|volatile|register)\s+)*/, '').trim();
+    const typeMatch = withoutStorage.match(/^(?:(?:unsigned|signed)\s+)?(?:(?:struct|enum|union)\s+\w+|\w+)/);
+    if (!typeMatch) continue;
+    const rest = withoutStorage.slice(typeMatch[0].length).trim();
+
+    const parts: string[] = [];
+    let current = '';
+    let paren = 0;
+    let bracket = 0;
+    let brace = 0;
+    for (let i = 0; i < rest.length; i++) {
+      const ch = rest[i];
+      if (ch === '(') paren++;
+      else if (ch === ')') paren = Math.max(0, paren - 1);
+      else if (ch === '[') bracket++;
+      else if (ch === ']') bracket = Math.max(0, bracket - 1);
+      else if (ch === '{') brace++;
+      else if (ch === '}') brace = Math.max(0, brace - 1);
+      if (ch === ',' && paren === 0 && bracket === 0 && brace === 0) {
+        parts.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim()) parts.push(current.trim());
+
+    for (const part of parts) {
+      const assignIndex = part.indexOf('=');
+      const namePart = (assignIndex >= 0 ? part.slice(0, assignIndex) : part).trim();
+      const nameNoArray = namePart.replace(/\[[^\]]*\]/g, '').trim();
+      const idMatch = nameNoArray.match(/([A-Za-z_]\w*)$/);
+      if (idMatch) {
+        const varName = idMatch[1];
+        const nameIndexInDecl = fullDecl.indexOf(varName);
+        const absOffset = offset + (nameIndexInDecl >= 0 ? nameIndexInDecl : 0);
+        const before = source.slice(0, absOffset);
+        const line = before.split('\n').length - 1;
+        const lineStart = before.lastIndexOf('\n') + 1;
+        const character = absOffset - lineStart;
+        result.push({
+          name: varName,
+          qualifiedName: varName,
+          label: varName,
+          signature: fullDecl,
+          declaration: fullDecl,
+          filePath,
+          line,
+          character,
+          kind: vscode.SymbolKind.Variable,
+          source: 'fallback'
+        });
+      }
+    }
+  }
+
+  // 3. Scan function declarations and definitions
+  const controlOrStatementPrefixes = /^(?:return|co_return|throw|emit|case|else|do|goto|break|continue|new|delete|using|typedef|static_assert)\b/;
   const pattern = /(^|\n)\s*((?:(?:extern|static|inline|constexpr|consteval|constinit|virtual|explicit|friend|const|volatile|unsigned|signed|long|short|struct|enum|union|typename|auto|CVIFUNC(?:_C)?|CVICALLBACK|__stdcall|__cdecl|__fastcall|WINAPI|CALLBACK|APIENTRY|NTAPI|__declspec\s*\([^)]*\)|[A-Za-z_]\w*)\s+|[*&]\s*)+)(((?:[A-Za-z_]\w*::)*)~?[A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*((?:(?:const|override|final)\b\s*|noexcept(?:\s*\([^)]*\))?\s*|[&]{1,2}\s*)*)(?=;|\{|:|=\s*(?:default|delete))/gm;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(masked)) !== null) {
@@ -198,12 +355,21 @@ export function scanCFunctions(source: string, filePath: string): CviSourceSymbo
     if (isOffsetInsideRanges(nameOffset, functionBodyRanges)) {
       continue;
     }
+
+    const terminatorMatch = masked.slice(pattern.lastIndex).match(/^\s*([;{:])/);
+    const terminator = terminatorMatch ? terminatorMatch[1] : '';
+    const isDefinition = terminator === '{' || terminator === ':';
+    const isDeclaration = terminator === ';';
+
     const before = source.slice(0, nameOffset);
     const line = before.split('\n').length - 1;
     const lineStart = before.lastIndexOf('\n') + 1;
     const character = nameOffset - lineStart;
     const raw = source.slice(match.index + match[1].length, pattern.lastIndex).trim();
     const signature = raw.replace(/\s+/g, ' ').replace(/\s*\{\s*$/, '').trim();
+    const rawParams = match[5] || '';
+    const label = formatCompactFunctionLabel(name, rawParams);
+
     const owner = qualifiedName.includes('::') ? qualifiedName.slice(0, qualifiedName.lastIndexOf('::')) : '';
     const ownerLeaf = owner ? owner.split('::').pop() || owner : '';
     const kind = owner && (name === ownerLeaf || name === `~${ownerLeaf}`)
@@ -212,16 +378,20 @@ export function scanCFunctions(source: string, filePath: string): CviSourceSymbo
     result.push({
       name,
       qualifiedName,
+      label,
       signature,
       declaration: normalizeSourceSymbolDeclaration(signature),
       filePath,
       line,
       character,
       kind,
-      source: 'fallback'
+      source: 'fallback',
+      isDeclaration,
+      isDefinition
     });
   }
 
+  // 4. Scoped constructors
   const ctorStartPattern = /(^|\n)\s*((?:[A-Za-z_]\w*::)+~?[A-Za-z_]\w*)\s*\(/gm;
   while ((match = ctorStartPattern.exec(masked)) !== null) {
     const qualifiedName = match[2].trim();
@@ -243,16 +413,27 @@ export function scanCFunctions(source: string, filePath: string): CviSourceSymbo
     const declarationStart = match.index + match[1].length;
     const raw = source.slice(declarationStart, closeParen + 1).trim();
     const signature = raw.replace(/\s+/g, ' ').trim();
+    const rawParams = masked.slice(openParen + 1, closeParen);
+    const label = formatCompactFunctionLabel(name, rawParams);
+
+    const terminatorMatch = following.match(/^\s*([;{:])/);
+    const terminator = terminatorMatch ? terminatorMatch[1] : '';
+    const isDefinition = terminator === '{' || terminator === ':';
+    const isDeclaration = terminator === ';';
+
     result.push({
       name,
       qualifiedName,
+      label,
       signature,
       declaration: normalizeSourceSymbolDeclaration(signature),
       filePath,
       line,
       character,
       kind: vscode.SymbolKind.Constructor,
-      source: 'fallback'
+      source: 'fallback',
+      isDeclaration,
+      isDefinition
     });
   }
 
@@ -383,10 +564,13 @@ export function formatSourceSymbolList(symbols: CviSourceSymbol[], filePath: str
       symbols: ordered.map((symbol) => ({
         name: symbol.name,
         qualifiedName: symbol.qualifiedName || symbol.name,
+        label: symbol.label || symbol.name,
         line: symbol.line + 1,
         kind: vscode.SymbolKind[symbol.kind] || 'Function',
         signature: symbol.signature,
-        declaration: symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature)
+        declaration: symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature),
+        isDeclaration: symbol.isDeclaration,
+        isDefinition: symbol.isDefinition
       }))
     }, null, 2) + '\n';
   }
@@ -394,17 +578,18 @@ export function formatSourceSymbolList(symbols: CviSourceSymbol[], filePath: str
     const lines = [`# CVI File Symbols — ${path.basename(filePath)}`, '', `Source: \`${filePath}\``, '', '| Line | Symbol | Declaration |', '| ---: | --- | --- |'];
     for (const symbol of ordered) {
       const declaration = (symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature)).replace(/\|/g, '\\|');
-      lines.push(`| ${symbol.line + 1} | \`${symbol.qualifiedName || symbol.name}\` | \`${declaration.replace(/`/g, '\\`')}\` |`);
+      lines.push(`| ${symbol.line + 1} | \`${symbol.label || symbol.qualifiedName || symbol.name}\` | \`${declaration.replace(/`/g, '\\`')}\` |`);
     }
     lines.push('');
     return lines.join('\n');
   }
-  return ordered.map((symbol) => `L${symbol.line + 1}\t${symbol.qualifiedName || symbol.name}\t${symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature)}`).join('\n') + (ordered.length ? '\n' : '');
+  return ordered.map((symbol) => `L${symbol.line + 1}\t${symbol.label || symbol.qualifiedName || symbol.name}\t${symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature)}`).join('\n') + (ordered.length ? '\n' : '');
 }
 
 export function buildHeaderFromSourceSymbols(symbols: CviSourceSymbol[], sourceFilePath: string): string {
   const isC = path.extname(sourceFilePath).toLowerCase() === '.c';
-  const ordered = [...symbols].sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
+  const fnSymbols = symbols.filter((s) => s.kind === vscode.SymbolKind.Function || s.kind === vscode.SymbolKind.Method || s.kind === vscode.SymbolKind.Constructor);
+  const ordered = [...fnSymbols].sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
   const publicDeclarations: string[] = [];
   const internalDeclarations: string[] = [];
   const memberDeclarations: string[] = [];
@@ -455,7 +640,8 @@ export function buildHeaderFromSourceSymbols(symbols: CviSourceSymbol[], sourceF
 export function buildSourceFromSourceSymbols(symbols: CviSourceSymbol[], sourceFilePath: string): string {
   const sourceExt = path.extname(sourceFilePath).toLowerCase();
   const isC = sourceExt === '.c';
-  const ordered = [...symbols].sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
+  const fnSymbols = symbols.filter((s) => s.kind === vscode.SymbolKind.Function || s.kind === vscode.SymbolKind.Method || s.kind === vscode.SymbolKind.Constructor);
+  const ordered = [...fnSymbols].sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
   const seen = new Set<string>();
   const definitions: string[] = [];
   let needsAbort = false;
@@ -637,7 +823,7 @@ function maskCommentsAndStrings(source: string): string {
 function dedupeSourceSymbols(symbols: CviSourceSymbol[]): CviSourceSymbol[] {
   const seen = new Set<string>();
   return symbols.filter((symbol) => {
-    const key = `${symbol.filePath.toLowerCase()}:${(symbol.qualifiedName || symbol.name).toLowerCase()}:${symbol.line}`;
+    const key = `${symbol.filePath.toLowerCase()}:${symbol.kind}:${(symbol.qualifiedName || symbol.name).toLowerCase()}:${symbol.line}:${symbol.isDeclaration ? 'decl' : 'def'}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

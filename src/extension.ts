@@ -52,6 +52,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     [{ language: 'c', scheme: 'file' }, { language: 'cpp', scheme: 'file' }],
     completionProvider
   );
+  const documentSymbolRegistration = vscode.languages.registerDocumentSymbolProvider(
+    [{ language: 'c', scheme: 'file' }, { language: 'cpp', scheme: 'file' }],
+    {
+      async provideDocumentSymbols(document: vscode.TextDocument): Promise<vscode.DocumentSymbol[]> {
+        const fileSymbols = await symbols.symbolsForFile(document.uri.fsPath);
+        return fileSymbols.map((sym) => {
+          const line = Math.max(0, Math.min(sym.line, document.lineCount - 1));
+          const char = Math.max(0, sym.character);
+          const range = new vscode.Range(line, char, line, char + sym.name.length);
+          return new vscode.DocumentSymbol(
+            sym.label || sym.name,
+            sym.isDeclaration ? 'declaration' : '',
+            sym.kind,
+            range,
+            range
+          );
+        });
+      }
+    }
+  );
+  void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFollowCursor', true);
+  void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
   const home = new HomePanel(context, workspaces, builds, installations);
   const buildSettings = new BuildSettingsPanel(workspaces, parser, projectSettings);
   const buildOptions = new BuildOptionsPanel(workspaces, parser, cppTools);
@@ -126,6 +148,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeView,
     fileSymbolsView,
     completionRegistration,
+    documentSymbolRegistration,
+    vscode.window.onDidChangeTextEditorSelection((event) => {
+      void fileSymbolsProvider.onEditorCursorMoved(event.textEditor);
+    }),
     ...statusBarItems,
     treeView.onDidChangeSelection((event) => {
       const selected = event.selection[0];
@@ -250,6 +276,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.exportFileSymbols', () => fileSymbolsProvider.exportSymbols()),
     register('labwindowsCvi.generateFileSymbolsHeader', () => fileSymbolsProvider.generateHeader()),
     register('labwindowsCvi.generateFileSymbolsSource', () => fileSymbolsProvider.generateSource()),
+    register('labwindowsCvi.outline.toggleFollowCursor', () => {
+      const next = !fileSymbolsProvider.isFollowCursor();
+      fileSymbolsProvider.setFollowCursor(next);
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFollowCursor', next);
+    }),
+    register('labwindowsCvi.outline.sortByPosition', () => {
+      fileSymbolsProvider.setSortMode('position');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
+    }),
+    register('labwindowsCvi.outline.sortByName', () => {
+      fileSymbolsProvider.setSortMode('name');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'name');
+    }),
+    register('labwindowsCvi.outline.sortByCategory', () => {
+      fileSymbolsProvider.setSortMode('category');
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'category');
+    }),
     register('labwindowsCvi.saveFile', (node?: FileNode) => node ? workspaces.saveFile(node.file.absolutePath) : undefined),
     register('labwindowsCvi.openPanelInCvi', (node?: FileNode) => node ? builds.openPanelInCvi(node.file.absolutePath) : undefined),
     register('labwindowsCvi.openPanelPathInCvi', (filePath?: string) => filePath ? builds.openPanelInCvi(filePath) : undefined),
