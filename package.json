@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -55,8 +55,8 @@
         },
         {
           "id": "labwindowsCvi.fileSymbols",
-          "name": "CVI File Symbols",
-          "contextualTitle": "CVI File Symbols",
+          "name": "Outline",
+          "contextualTitle": "Outline",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": false
         },
@@ -482,7 +482,7 @@
       },
       {
         "command": "labwindowsCvi.editTargetSettingsSafeMode",
-        "title": "Target Settings (Safe Mode)\u2026",
+        "title": "Target Settings (Safe Mode)…",
         "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
@@ -494,7 +494,7 @@
       },
       {
         "command": "labwindowsCvi.editBuildOptionsSafeMode",
-        "title": "Build Options (Safe Mode)\u2026",
+        "title": "Build Options (Safe Mode)…",
         "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
@@ -705,6 +705,26 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "labwindowsCvi.outline.toggleFollowCursor",
+        "title": "Follow Cursor",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.sortByPosition",
+        "title": "Sort By: Position",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.sortByName",
+        "title": "Sort By: Name",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.outline.sortByCategory",
+        "title": "Sort By: Category",
+        "category": "LabWindows/CVI"
+      },
+      {
         "command": "labwindowsCvi.sanitizeCurrentFile",
         "title": "Sanitize Invisible / Incompatible Characters in Current File",
         "category": "LabWindows/CVI",
@@ -860,6 +880,30 @@
           "command": "labwindowsCvi.generateFileSymbolsSource",
           "when": "view == labwindowsCvi.fileSymbols",
           "group": "navigation@5"
+        },
+        {
+          "command": "labwindowsCvi.outline.toggleFollowCursor",
+          "when": "view == labwindowsCvi.fileSymbols",
+          "group": "1_outline_options@1",
+          "toggled": "labwindowsCvi.outlineFollowCursor"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByPosition",
+          "when": "view == labwindowsCvi.fileSymbols",
+          "group": "2_outline_sort@1",
+          "toggled": "labwindowsCvi.outlineSortMode == position"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByName",
+          "when": "view == labwindowsCvi.fileSymbols",
+          "group": "2_outline_sort@2",
+          "toggled": "labwindowsCvi.outlineSortMode == name"
+        },
+        {
+          "command": "labwindowsCvi.outline.sortByCategory",
+          "when": "view == labwindowsCvi.fileSymbols",
+          "group": "2_outline_sort@3",
+          "toggled": "labwindowsCvi.outlineSortMode == category"
         },
         {
           "command": "labwindowsCvi.refreshResourceTracking",

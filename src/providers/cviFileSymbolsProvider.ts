@@ -17,6 +17,8 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
   readonly onDidChangeTreeData = this.changeEmitter.event;
   private selectedFile?: string;
   private view?: vscode.TreeView<FileSymbolNode>;
+  private sortMode: 'position' | 'name' | 'category' = 'position';
+  private followCursor = true;
 
   constructor(private readonly symbols: CviSymbolService) {}
 
@@ -43,6 +45,28 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     return this.selectedFile;
   }
 
+  getSortMode(): 'position' | 'name' | 'category' {
+    return this.sortMode;
+  }
+
+  setSortMode(mode: 'position' | 'name' | 'category'): void {
+    if (this.sortMode === mode) return;
+    this.sortMode = mode;
+    this.refresh();
+  }
+
+  isFollowCursor(): boolean {
+    return this.followCursor;
+  }
+
+  setFollowCursor(enabled: boolean): void {
+    this.followCursor = enabled;
+  }
+
+  getParent(_element: FileSymbolNode): vscode.ProviderResult<FileSymbolNode> {
+    return undefined;
+  }
+
   async currentSymbols(): Promise<CviSourceSymbol[]> {
     return this.selectedFile ? this.symbols.symbolsForFile(this.selectedFile) : [];
   }
@@ -55,17 +79,46 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
   }
 
+  async onEditorCursorMoved(editor: vscode.TextEditor): Promise<void> {
+    if (!this.followCursor || !this.selectedFile || !this.view) return;
+    if (path.normalize(editor.document.uri.fsPath) !== this.selectedFile) return;
+
+    const cursorLine = editor.selection.active.line;
+    const symbols = await this.currentSymbols();
+    if (!symbols.length) return;
+
+    let best: CviSourceSymbol | undefined;
+    for (const s of symbols) {
+      if (s.line <= cursorLine) {
+        best = s;
+      } else {
+        break;
+      }
+    }
+    if (!best && symbols.length > 0) {
+      best = symbols[0];
+    }
+
+    if (best) {
+      try {
+        await this.view.reveal(best, { select: true, focus: false });
+      } catch {
+        // Ignore if view is not visible or reveal is not ready
+      }
+    }
+  }
+
   async copySymbol(symbol?: CviSourceSymbol): Promise<void> {
-    if (!symbol || 'label' in symbol) return;
+    if (!symbol) return;
     await vscode.env.clipboard.writeText(symbol.signature);
-    void vscode.window.setStatusBarMessage(`CVI: copied ${symbol.qualifiedName || symbol.name}`, 1800);
+    void vscode.window.setStatusBarMessage(`CVI: copied ${symbol.label || symbol.qualifiedName || symbol.name}`, 1800);
   }
 
   async copySymbolDeclaration(symbol?: CviSourceSymbol): Promise<void> {
-    if (!symbol || 'label' in symbol) return;
+    if (!symbol) return;
     const declaration = symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature);
     await vscode.env.clipboard.writeText(declaration);
-    void vscode.window.setStatusBarMessage(`CVI: copied declaration for ${symbol.qualifiedName || symbol.name}`, 1800);
+    void vscode.window.setStatusBarMessage(`CVI: copied declaration for ${symbol.label || symbol.qualifiedName || symbol.name}`, 1800);
   }
 
   async copyAllSymbols(asDeclarations = false): Promise<void> {
@@ -75,14 +128,14 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     }
     const symbols = await this.currentSymbols();
     if (!symbols.length) {
-      void vscode.window.showWarningMessage('No function/method declaration or definition was detected in the selected file.');
+      void vscode.window.showWarningMessage('No symbols were detected in the selected file.');
       return;
     }
     const text = asDeclarations
       ? symbols.map((symbol) => symbol.declaration || normalizeSourceSymbolDeclaration(symbol.signature)).join('\n') + '\n'
       : formatSourceSymbolList(symbols, this.selectedFile, 'text');
     await vscode.env.clipboard.writeText(text);
-    void vscode.window.showInformationMessage(`Copied ${symbols.length} File Symbol${symbols.length === 1 ? '' : 's'} to the clipboard.`);
+    void vscode.window.showInformationMessage(`Copied ${symbols.length} symbol${symbols.length === 1 ? '' : 's'} to the clipboard.`);
   }
 
   async exportSymbols(): Promise<void> {
@@ -92,7 +145,7 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     }
     const symbols = await this.currentSymbols();
     if (!symbols.length) {
-      void vscode.window.showWarningMessage('No function/method declaration or definition was detected in the selected file.');
+      void vscode.window.showWarningMessage('No symbols were detected in the selected file.');
       return;
     }
     const choice = await vscode.window.showQuickPick([
@@ -125,7 +178,8 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
       return;
     }
     const symbols = await this.currentSymbols();
-    if (!symbols.length) {
+    const fnSymbols = symbols.filter((s) => s.kind === vscode.SymbolKind.Function || s.kind === vscode.SymbolKind.Method || s.kind === vscode.SymbolKind.Constructor);
+    if (!fnSymbols.length) {
       void vscode.window.showWarningMessage('No function/method declaration or definition was detected in the selected file.');
       return;
     }
@@ -140,7 +194,7 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     if (!target) return;
     const content = buildHeaderFromSourceSymbols(symbols, this.selectedFile);
     await vscode.workspace.fs.writeFile(target, Buffer.from(content, 'utf8'));
-    const action = await vscode.window.showInformationMessage(`Generated header from ${symbols.length} detected symbol(s): ${target.fsPath}`, 'Open');
+    const action = await vscode.window.showInformationMessage(`Generated header from ${fnSymbols.length} detected symbol(s): ${target.fsPath}`, 'Open');
     if (action === 'Open') {
       const document = await vscode.workspace.openTextDocument(target);
       await vscode.window.showTextDocument(document, { preview: false });
@@ -153,7 +207,8 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
       return;
     }
     const symbols = await this.currentSymbols();
-    if (!symbols.length) {
+    const fnSymbols = symbols.filter((s) => s.kind === vscode.SymbolKind.Function || s.kind === vscode.SymbolKind.Method || s.kind === vscode.SymbolKind.Constructor);
+    if (!fnSymbols.length) {
       void vscode.window.showWarningMessage('No function/method declaration or definition was detected in the selected file.');
       return;
     }
@@ -171,7 +226,7 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
     if (!target) return;
     const content = buildSourceFromSourceSymbols(symbols, this.selectedFile);
     await vscode.workspace.fs.writeFile(target, Buffer.from(content, 'utf8'));
-    const action = await vscode.window.showInformationMessage(`Generated source stubs from ${symbols.length} detected symbol(s): ${target.fsPath}`, 'Open');
+    const action = await vscode.window.showInformationMessage(`Generated source stubs from ${fnSymbols.length} detected symbol(s): ${target.fsPath}`, 'Open');
     if (action === 'Open') {
       const document = await vscode.workspace.openTextDocument(target);
       await vscode.window.showTextDocument(document, { preview: false });
@@ -179,22 +234,31 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
   }
 
   getTreeItem(node: FileSymbolNode): vscode.TreeItem {
-    if ('label' in node) {
+    if ('kind' in node && node.kind === 'placeholder') {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
       item.iconPath = new vscode.ThemeIcon('info');
       return item;
     }
-    const displayName = node.qualifiedName || node.name;
+    const sym = node as CviSourceSymbol;
+    const displayName = sym.label || sym.qualifiedName || sym.name;
     const item = new vscode.TreeItem(displayName, vscode.TreeItemCollapsibleState.None);
-    item.description = `L${node.line + 1}`;
-    item.tooltip = `${node.signature}\n${node.filePath}:${node.line + 1}`;
+    if (sym.isDeclaration) {
+      item.description = 'declaration';
+    }
+    item.tooltip = `${sym.signature}\n${sym.filePath}:${sym.line + 1}`;
     item.contextValue = 'cviFileSymbol';
     item.iconPath = new vscode.ThemeIcon(
-      node.kind === vscode.SymbolKind.Method
-        ? 'symbol-method'
-        : node.kind === vscode.SymbolKind.Constructor ? 'symbol-constructor' : 'symbol-function'
+      sym.kind === vscode.SymbolKind.Constant
+        ? 'symbol-constant'
+        : sym.kind === vscode.SymbolKind.Variable
+          ? 'symbol-variable'
+          : sym.kind === vscode.SymbolKind.Method
+            ? 'symbol-method'
+            : sym.kind === vscode.SymbolKind.Constructor
+              ? 'symbol-constructor'
+              : 'symbol-function'
     );
-    item.command = { command: 'labwindowsCvi.revealFileSymbol', title: 'Reveal CVI file symbol', arguments: [node] };
+    item.command = { command: 'labwindowsCvi.revealFileSymbol', title: 'Reveal CVI file symbol', arguments: [sym] };
     return item;
   }
 
@@ -203,7 +267,26 @@ export class CviFileSymbolsProvider implements vscode.TreeDataProvider<FileSymbo
       return [{ kind: 'placeholder', label: 'Select a C/C++ source or header file in CVI Workspace.' }];
     }
     const symbols = await this.symbols.symbolsForFile(this.selectedFile);
-    return symbols.length > 0 ? symbols : [{ kind: 'placeholder', label: 'No function or method declaration found in the selected file.' }];
+    if (!symbols.length) {
+      return [{ kind: 'placeholder', label: 'No symbols found in the selected file.' }];
+    }
+
+    const sorted = [...symbols];
+    if (this.sortMode === 'name') {
+      sorted.sort((a, b) => (a.label || a.name).localeCompare(b.label || b.name) || a.line - b.line);
+    } else if (this.sortMode === 'category') {
+      const categoryScore = (s: CviSourceSymbol): number => {
+        if (s.kind === vscode.SymbolKind.Constant) return 1;
+        if (s.kind === vscode.SymbolKind.Variable) return 2;
+        return 3;
+      };
+      sorted.sort((a, b) => categoryScore(a) - categoryScore(b) || a.line - b.line || (a.label || a.name).localeCompare(b.label || b.name));
+    } else {
+      // 'position'
+      sorted.sort((a, b) => a.line - b.line || (a.label || a.name).localeCompare(b.label || b.name));
+    }
+
+    return sorted;
   }
 
   private updateDescription(): void {
