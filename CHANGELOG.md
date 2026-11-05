@@ -15,6 +15,34 @@ All notable changes to the "LabWindows/CVI Tools" extension will be documented i
   - Added **Sort By** options: Position (file order), Name (A-Z), and Category (Macros -> Variables -> Functions).
   - Registered `DocumentSymbolProvider` for C/C++ files, activating native VS Code Outline with integrated **Filter on Type**.
 
+## [0.0.11] - 2026-11-04
+
+### Added
+- **Live CVI Resource Tracking & Tree View**:
+  - Added dedicated **CVI Resource Tracking** view in the Run & Debug sidebar container (`labwindowsCvi.resourceTracking`).
+  - Hierarchical tracking for all CVI subsystems: Dynamic Memory, User Interface & Panels, File & System Handles, Threads & Synchronization, and Communication.
+  - Live resource inspection on breakpoints, stepping, and paused execution with automatic refresh (`labwindowsCvi.resourceTracking.autoRefreshOnBreakpoint`).
+  - Allocation details breakdown: physical memory addresses, exact byte sizes, resource identifiers, calling source file and line number ranges.
+  - Markdown resource report generator and manual refresh/clear actions.
+- **Variable Name Resolution**:
+  - Correlated raw CVI heap dump pointers with active stack frame symbols (`info locals`, `info args`) and DWARF debug records.
+  - Replaced anonymous hexadecimal memory addresses with actual variable names (e.g. `leakedString (0x000000000047D58F0) 256 B`).
+- **Artifact-Free Diagnostic Dumping (OS VirtualAlloc Bypass)**:
+  - Bypassed CVI's CRT allocation hooks by allocating diagnostic dump buffers using Windows kernel `VirtualAlloc`.
+  - Permanently eliminated the 65-byte phantom memory leak previously caused by GDB inferior function calls (`infcall`) allocating string paths via the debuggee CRT heap.
+- **Non-Intrusive Program Exit Leak Trapping**:
+  - Implemented dual-trap architecture at program teardown: silent trap on `CloseCVIRTE()` and dynamic address trapping on `main()` return (`ret`).
+  - Automated exit leak notifications (`labwindowsCvi.resourceTracking.notifyOnLeaks`) differentiating between clean exits (0 leaks) and unreleased resources.
+- **Runtime Error Interception & Visual Editor Diagnostics**:
+  - Intercepted LabWindows/CVI compiler runtime checks (uninitialized local variables, array bounds violations, assertions: `ReportUPError`, `_UPLibReportError`, `_UPLibBreakpoint`, `CVIAssert`).
+  - Prevented modal Windows dialogs (*"Non-Fatal Run-time Error"*) and external CVI IDE invocation by automatically popping the error frame using GDB `return`.
+  - Configured Microsoft MIEngine with `unknownBreakpointHandling: "stop"`, eliminating disruptive VS Code red exception callout boxes.
+  - Added persistent in-editor line decoration (`TextEditorDecorationType`) highlighting the offending source line with soft-red background, overview ruler marker, and inline badge (`⚠️ [LabWindows/CVI Run-Time Error Check Failed]`).
+  - Auto-clearing of error decorations on resume (Continue, Step, Restart, Stop).
+  - Formatted diagnostic banners emitted to the VS Code Debug Console.
+- **Architecture Documentation**:
+  - Added comprehensive technical reference in `RESOURCE_TRACKING.md` detailing CVI runtime internals (`cvirte.dll`), GDB integration, and diagnostic workflows.
+
 ## [0.0.2] - 2026-11-02
 
 ### Added
