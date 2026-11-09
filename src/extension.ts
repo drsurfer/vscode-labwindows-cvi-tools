@@ -242,11 +242,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.selectTargetTypeDLL', () => workspaces.selectTargetType()),
     register('labwindowsCvi.selectTargetTypeLIB', () => workspaces.selectTargetType()),
     register('labwindowsCvi.editTargetSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
-    register('labwindowsCvi.editTargetSettingsSafeMode', (node?: ProjectNode) => buildSettings.showSafeMode(node?.ref)),
     register('labwindowsCvi.editBuildSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
-    register('labwindowsCvi.editBuildSettingsSafeMode', (node?: ProjectNode) => buildSettings.showSafeMode(node?.ref)),
     register('labwindowsCvi.editBuildOptions', (node?: ProjectNode) => buildOptions.show(node?.ref)),
-    register('labwindowsCvi.editBuildOptionsSafeMode', (node?: ProjectNode) => buildOptions.showSafeMode(node?.ref)),
+    register('labwindowsCvi.quickActions.editCommandLine', () => quickActions.editCommandLine()),
+    register('labwindowsCvi.quickActions.editWorkingDirectory', () => quickActions.editWorkingDirectory()),
+    register('labwindowsCvi.quickActions.editEnvironment', () => quickActions.editEnvironment()),
     register('labwindowsCvi.executeProject', (node?: ProjectNode) => node ? builds.buildAndRun(node.ref) : undefined),
     register('labwindowsCvi.debugProjectInCvi', async (node?: ProjectNode) => { if (node?.ref) await workspaces.setActiveProject(node.ref); return await builds.debugWithVsCode(node?.ref); }),
     register('labwindowsCvi.editProjectInCvi', (node?: ProjectNode) => node ? builds.openProjectInCvi(node.ref.absolutePath) : undefined),
@@ -276,6 +276,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.removeFolder', (node?: FolderNode) => node ? workspaces.removeFolder(node.ref, node.folderPath) : undefined),
     register('labwindowsCvi.openRecent', () => workspaces.promptOpenRecent()),
     register('labwindowsCvi.toggleShowFullFilePaths', async () => {
+      const config = vscode.workspace.getConfiguration('labwindowsCvi');
+      const current = config.get<boolean>('showFullFilePaths', false);
+      await config.update('showFullFilePaths', !current, vscode.ConfigurationTarget.Global);
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.showFullFilePaths', !current);
+      treeProvider.refresh();
+    }),
+    register('labwindowsCvi.toggleShowFullFilePathsOn', async () => {
       const config = vscode.workspace.getConfiguration('labwindowsCvi');
       const current = config.get<boolean>('showFullFilePaths', false);
       await config.update('showFullFilePaths', !current, vscode.ConfigurationTarget.Global);
@@ -474,8 +481,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   updateStatusBar();
 
+  const isWorkspaceOpen = Boolean(vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0);
   const showOnStartup = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showHomeOnStartup', true);
-  if (showOnStartup) {
+  if (showOnStartup && !isWorkspaceOpen) {
     home.showOnStartup();
   }
 }

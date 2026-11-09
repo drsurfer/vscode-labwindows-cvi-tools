@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -481,21 +481,9 @@
         "category": "LabWindows/CVI"
       },
       {
-        "command": "labwindowsCvi.editTargetSettingsSafeMode",
-        "title": "Target Settings (Safe Mode)…",
-        "icon": "$(shield)",
-        "category": "LabWindows/CVI"
-      },
-      {
         "command": "labwindowsCvi.editBuildOptions",
         "title": "Build Options...",
         "icon": "$(tools)",
-        "category": "LabWindows/CVI"
-      },
-      {
-        "command": "labwindowsCvi.editBuildOptionsSafeMode",
-        "title": "Build Options (Safe Mode)…",
-        "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
       {
@@ -785,7 +773,12 @@
       },
       {
         "command": "labwindowsCvi.toggleShowFullFilePaths",
-        "title": "LabWindows/CVI: Toggle Full File Paths in Project Tree",
+        "title": "Show Full Pathnames",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+        "title": "✓ Show Full Pathnames",
         "icon": "$(list-flat)"
       },
       {
@@ -797,6 +790,21 @@
         "command": "labwindowsCvi.moveItemDown",
         "title": "Move Down",
         "icon": "$(arrow-down)"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editCommandLine",
+        "title": "Edit Command Line Arguments",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editWorkingDirectory",
+        "title": "Edit Working Directory",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editEnvironment",
+        "title": "Edit Environment Variables",
+        "category": "LabWindows/CVI"
       }
     ],
     "menus": {
@@ -1002,8 +1010,13 @@
           "group": "navigation@2.5"
         },
         {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && labwindowsCvi.showFullFilePaths",
+          "group": "navigation@10"
+        },
+        {
           "command": "labwindowsCvi.toggleShowFullFilePaths",
-          "when": "view == labwindowsCvi.workspaceExplorer",
+          "when": "view == labwindowsCvi.workspaceExplorer && !labwindowsCvi.showFullFilePaths",
           "group": "navigation@10"
         }
       ],
@@ -1284,19 +1297,9 @@
           "group": "settings@2"
         },
         {
-          "command": "labwindowsCvi.editTargetSettingsSafeMode",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
-          "group": "settings@3"
-        },
-        {
           "command": "labwindowsCvi.editBuildOptions",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
           "group": "settings@4"
-        },
-        {
-          "command": "labwindowsCvi.editBuildOptionsSafeMode",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
-          "group": "settings@5"
         },
         {
           "command": "labwindowsCvi.generatePrototypes",
@@ -1324,13 +1327,23 @@
           "group": "view@1"
         },
         {
-          "command": "labwindowsCvi.toggleShowFullFilePaths",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace",
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace && labwindowsCvi.showFullFilePaths",
           "group": "view@2"
         },
         {
           "command": "labwindowsCvi.toggleShowFullFilePaths",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace && !labwindowsCvi.showFullFilePaths",
+          "group": "view@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject && !labwindowsCvi.showFullFilePaths",
           "group": "view@1"
         },
         {
@@ -1344,8 +1357,13 @@
           "group": "ordering@2"
         },
         {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
           "command": "labwindowsCvi.toggleShowFullFilePaths",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder && !labwindowsCvi.showFullFilePaths",
           "group": "view@1"
         },
         {
@@ -1359,8 +1377,13 @@
           "group": "ordering@2"
         },
         {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./ && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
           "command": "labwindowsCvi.toggleShowFullFilePaths",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./ && !labwindowsCvi.showFullFilePaths",
           "group": "view@1"
         }
       ],

@@ -64,6 +64,19 @@ export class HomePanel implements vscode.Disposable {
       return;
     }
 
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const isHome = (tab.input instanceof vscode.TabInputWebview && tab.input.viewType === 'labwindowsCvi.home') ||
+          (tab.input && typeof tab.input === 'object' && 'viewType' in tab.input && (tab.input as any).viewType === 'labwindowsCvi.home');
+        if (isHome) {
+          if (options?.preserveFocus) {
+            return;
+          }
+          void vscode.window.tabGroups.close(tab);
+        }
+      }
+    }
+
     this.panel = vscode.window.createWebviewPanel(
       'labwindowsCvi.home',
       'LabWindows/CVI Home',

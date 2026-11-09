@@ -89,174 +89,6 @@ export class BuildSettingsPanel implements vscode.Disposable {
     }
   }
 
-  /**
-   * Native VS Code fallback for machines where Chromium's webview service
-   * worker is temporarily unavailable. It intentionally covers the settings
-   * most often changed during a build workflow and uses the exact same parser
-   * and backup path as the full HTML editor.
-   */
-  async showSafeMode(projectRef?: CviWorkspaceProjectRef): Promise<void> {
-    const ref = projectRef ?? this.workspaces.activeProjectRef;
-    if (!ref?.exists) {
-      vscode.window.showErrorMessage('No existing CVI project is selected.');
-      return;
-    }
-    let scope = this.selectedScope;
-
-    while (true) {
-      const representativeMode = this.representativeMode(scope);
-      const target = this.parser.getNativeTargetSettings(ref.absolutePath, representativeMode);
-      const projectSettings = this.settings.getSettings(ref, representativeMode);
-      const choice = await vscode.window.showQuickPick([
-        { id: 'full', label: '$(globe) Open full build-settings page', description: 'Use the HTML editor when VS Code webviews are available.' },
-        { id: 'scope', label: '$(settings) Configuration scope', description: scopeLabel(scope) },
-        { id: 'targetType', label: '$(symbol-enum) Target type', description: target.targetType },
-        { id: 'outputPath', label: '$(file) Output file', description: target.outputPath || 'Empty' },
-        { id: 'applicationTitle', label: '$(tag) Application title', description: target.applicationTitle || 'Empty' },
-        { id: 'iconFile', label: '$(file-media) Application icon file', description: target.iconFile || 'Empty' },
-        { id: 'runtimeSupport', label: '$(gear) Run-time support', description: target.runtimeSupport || 'Empty' },
-        { id: 'runtimeBinding', label: '$(link) Run-time engine binding', description: target.runtimeBinding || 'Empty' },
-        { id: 'generateSourceDocumentation', label: '$(book) Generate help from source', description: target.generateSourceDocumentation || 'Empty' },
-        { id: 'arguments', label: '$(terminal) Command-line arguments', description: projectSettings.run.arguments || 'Empty' },
-        { id: 'workingDirectory', label: '$(folder) Working directory', description: projectSettings.run.workingDirectory || 'Empty' },
-        { id: 'environmentOptions', label: '$(symbol-key) Environment options', description: projectSettings.run.environmentOptions || 'Empty' },
-        { id: 'externalProcessPath', label: '$(debug-start) External executable for DLL debugging', description: projectSettings.run.externalProcessPath || 'Empty' },
-        { id: 'preBuildActions', label: '$(list-ordered) Pre-build actions', description: `${projectSettings.preBuildActions.length} action(s)` },
-        { id: 'customBuildActions', label: '$(list-ordered) Custom build actions', description: `${projectSettings.customBuildActions.length} action(s)` },
-        { id: 'postBuildActions', label: '$(list-ordered) Post-build actions', description: `${projectSettings.postBuildActions.length} action(s)` },
-        { id: 'forcedModules', label: '$(library) LoadExternalModule files', description: `${target.forcedModules.length} module(s)` },
-        { id: 'close', label: '$(close) Close safe-mode editor' }
-      ], { title: `CVI Target Settings (Safe Mode) — ${ref.name}`, placeHolder: 'Select a setting to edit' });
-
-      if (!choice || choice.id === 'close') {
-        this.selectedScope = scope;
-        return;
-      }
-      if (choice.id === 'full') {
-        this.selectedScope = scope;
-        this.show(ref);
-        return;
-      }
-      if (choice.id === 'scope') {
-        const selected = await vscode.window.showQuickPick(scopeChoices(), { title: 'Select configuration scope' });
-        if (selected) {
-          scope = selected.id;
-          this.selectedScope = scope;
-        }
-        continue;
-      }
-      if (choice.id === 'targetType') {
-        const selected = await vscode.window.showQuickPick(['Executable', 'Dynamic Link Library', 'Static Library'], { title: 'Select CVI target type' });
-        if (selected) {
-          target.targetType = selected;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-
-      if (choice.id === 'runtimeSupport') {
-        const value = await pickStoredValue('Select run-time support', RUNTIME_SUPPORT_OPTIONS, target.runtimeSupport);
-        if (value !== undefined) {
-          target.runtimeSupport = value;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-      if (choice.id === 'runtimeBinding') {
-        const options = target.targetType === 'Dynamic Link Library' ? DLL_RUNTIME_BINDING_OPTIONS : EXE_RUNTIME_BINDING_OPTIONS;
-        const value = await pickStoredValue('Select run-time engine binding', options, target.runtimeBinding);
-        if (value !== undefined) {
-          target.runtimeBinding = value;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-      if (choice.id === 'generateSourceDocumentation') {
-        const value = await pickStoredValue('Select generated help format', SOURCE_DOCUMENTATION_OPTIONS, target.generateSourceDocumentation);
-        if (value !== undefined) {
-          target.generateSourceDocumentation = value;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-
-      const nativeTextFields: Record<string, keyof Pick<CviNativeTargetSettings, 'outputPath' | 'applicationTitle' | 'iconFile'>> = {
-        outputPath: 'outputPath',
-        applicationTitle: 'applicationTitle',
-        iconFile: 'iconFile'
-      };
-      const runTextFields: Record<string, keyof CviProjectBuildSettings['run']> = {
-        arguments: 'arguments',
-        workingDirectory: 'workingDirectory',
-        environmentOptions: 'environmentOptions',
-        externalProcessPath: 'externalProcessPath'
-      };
-
-      if (choice.id in nativeTextFields) {
-        const key = nativeTextFields[choice.id];
-        const value = await vscode.window.showInputBox({ title: stripCodicon(choice.label), value: String(target[key] ?? ''), ignoreFocusOut: true });
-        if (value !== undefined) {
-          target[key] = value;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-      if (choice.id in runTextFields) {
-        const key = runTextFields[choice.id];
-        const value = await vscode.window.showInputBox({ title: stripCodicon(choice.label), value: projectSettings.run[key], ignoreFocusOut: true });
-        if (value !== undefined) {
-          projectSettings.run[key] = value;
-          this.applyProjectSettings(ref, scope, projectSettings);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-
-      const actionFields: Record<string, keyof Pick<CviProjectBuildSettings, 'preBuildActions' | 'customBuildActions' | 'postBuildActions'>> = {
-        preBuildActions: 'preBuildActions',
-        customBuildActions: 'customBuildActions',
-        postBuildActions: 'postBuildActions'
-      };
-      if (choice.id in actionFields) {
-        const key = actionFields[choice.id];
-        const value = await vscode.window.showInputBox({
-          title: stripCodicon(choice.label),
-          prompt: 'Enter one action per line or separate actions with semicolons.',
-          value: projectSettings[key].join('; '),
-          ignoreFocusOut: true
-        });
-        if (value !== undefined) {
-          projectSettings[key] = splitSafeList(value);
-          this.applyProjectSettings(ref, scope, projectSettings);
-          this.workspaces.refresh();
-        }
-        continue;
-      }
-      if (choice.id === 'forcedModules') {
-        if (target.runtimeSupport === 'Instrument Driver Support Only') {
-          vscode.window.showWarningMessage('LoadExternalModule options are unavailable when run-time support is Instrument Driver Support Only.');
-          continue;
-        }
-        const value = await vscode.window.showInputBox({
-          title: 'LoadExternalModule files',
-          prompt: 'Enter one .lib or .obj file per line or separate entries with semicolons.',
-          value: target.forcedModules.join('; '),
-          ignoreFocusOut: true
-        });
-        if (value !== undefined) {
-          target.forcedModules = splitSafeList(value);
-          target.usingLoadExternalModule = target.forcedModules.length > 0;
-          this.applyNativeTargetSettings(ref, scope, target);
-          this.workspaces.refresh();
-        }
-      }
-    }
-  }
 
   dispose(): void {
     this.panel?.dispose();
@@ -489,7 +321,7 @@ body:not(.settings-js-ready) [data-settings-section]:not([data-settings-page="ov
 <body data-target="${escapeHtml(target.targetType)}">
 <h1>CVI Project Settings</h1><div class="subtitle">${escapeHtml(ref.name)} · edited configuration: <strong>${escapeHtml(scopeLabel(mode))}</strong></div><div class="path">${escapeHtml(ref.absolutePath)}</div>
 <div id="settingsStickyHeader" class="settings-sticky-header">
-  <div class="toolbar"><div><label class="field">Edited build configuration<select id="configurationScope">${scopeOptions(mode)}</select></label><div class="muted">${mode === 'all' ? 'The entered values will be applied to Debug, Release, Debug64 and Release64.' : `Only ${escapeHtml(scopeLabel(mode))} will be modified.`}</div></div><div class="actions"><button id="save" type="button">Save CVI settings</button><button data-command="labwindowsCvi.editBuildSettingsSafeMode" class="secondary" type="button">Safe mode</button><button data-command="labwindowsCvi.openWorkspaceInCvi" class="secondary" type="button">Open in CVI</button></div></div>
+  <div class="toolbar"><div><label class="field">Edited build configuration<select id="configurationScope">${scopeOptions(mode)}</select></label><div class="muted">${mode === 'all' ? 'The entered values will be applied to Debug, Release, Debug64 and Release64.' : `Only ${escapeHtml(scopeLabel(mode))} will be modified.`}</div></div><div class="actions"><button id="save" type="button">Save CVI settings</button><button data-command="labwindowsCvi.openWorkspaceInCvi" class="secondary" type="button">Open in CVI</button></div></div>
   <nav id="pageNav" class="page-nav" aria-label="Settings pages">${pageNavigation}</nav>
   <div id="settingsNavigation" class="settings-nav"><input id="settingsFilter" type="search" placeholder="Filter settings on this page…" aria-label="Filter current settings page"><select id="sectionNav" aria-label="Jump to a section"><option value="">Jump to a section…</option></select><div class="page-context"><strong id="pageTitle">Overview</strong><span id="pageDescription">Project status and common CVI actions.</span><span id="dirtyState" class="dirty">Saved state</span></div></div>
 </div>
@@ -540,7 +372,6 @@ function textField(label: string, id: string, value: string, placeholder = ''): 
 function pathField(label: string, id: string, value: string): string { return `<label class="field">${escapeHtml(label)}<span class="path-control"><input id="${escapeHtml(id)}" value="${escapeHtml(value)}"><button class="browse" type="button" data-browse-field="${escapeHtml(id)}" title="Browse…" aria-label="Browse ${escapeHtml(label)}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3.25A1.25 1.25 0 0 1 2.75 2h3.1c.4 0 .77.19 1 .5l.6.8h5.8a1.25 1.25 0 0 1 1.25 1.25v6.7a1.25 1.25 0 0 1-1.25 1.25H2.75a1.25 1.25 0 0 1-1.25-1.25v-8Zm1.25-.1a.1.1 0 0 0-.1.1v1h10.7v-.7a.1.1 0 0 0-.1-.1H6.88l-.95-1.27a.1.1 0 0 0-.08-.03h-3.1Zm-.1 2.25v5.85c0 .06.04.1.1.1h10.5a.1.1 0 0 0 .1-.1V5.4H2.65Z"/></svg></button></span></label>`; }
 function selectField(label: string, id: string, selected: string, options: SelectOption[]): string { return `<label class="field">${escapeHtml(label)}<select id="${escapeHtml(id)}">${selectOptions(options, selected)}</select></label>`; }
 function selectOptions(options: SelectOption[], selected: string): string { const values = [...options]; if (selected && !values.some(([value]) => value === selected)) { values.push([selected, `${selected} (existing value)`]); } return values.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join(''); }
-function splitSafeList(value: string): string[] { return value.split(/(?:\r?\n|;)/).map((entry) => entry.trim()).filter(Boolean); }
 function escapeHtml(value: string): string { return String(value ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'); }
 function stripCodicon(value: string): string { return value.replace(/^\$\([^)]*\)\s*/, ''); }
 function normalizeBuildLogDetail(value: string | undefined): 'compact' | 'normal' | 'verbose' { return value === 'compact' || value === 'verbose' ? value : 'normal'; }

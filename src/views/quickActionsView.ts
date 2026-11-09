@@ -29,15 +29,6 @@ interface QuickActionNode {
   contextValue?: string;
 }
 
-/**
- * Native summary view used instead of a WebviewView.
- *
- * A contributed WebviewView starts a Chromium service worker as soon as the
- * side bar is restored. On affected VS Code installations, a stale Chromium
- * state can make every webview fail with InvalidStateError. A native tree view
- * avoids that failure path during extension activation while preserving the
- * useful project summary.
- */
 export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode>, vscode.Disposable {
   private readonly emitter = new vscode.EventEmitter<QuickActionNode | undefined | null | void>();
   readonly onDidChangeTreeData = this.emitter.event;
@@ -89,21 +80,74 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
       return [];
     }
     return [
-      info(summary.projectName, `${summary.workspaceName} · ${summary.projectCount} project${summary.projectCount === 1 ? '' : 's'}`, 'project'),
-      info('Target type', summary.targetType, 'symbol-enum'),
-      info('Build mode', modeDescription(summary.buildMode), 'settings-gear'),
-      info('Command line', summary.commandLine, 'terminal'),
-      info('Working directory', summary.workingDirectory, 'folder'),
-      info('Environment', summary.environment, 'symbol-key'),
-      info('Build steps', summary.buildSteps, 'list-ordered'),
-      info('Dependencies', summary.dependencies, 'references'),
-      info('Project files', summary.files, summary.hasMissingFiles ? 'warning' : 'pass'),
-      action('Open target settings…', 'labwindowsCvi.editTargetSettings', 'settings-gear'),
-      action('Open target settings in safe mode…', 'labwindowsCvi.editTargetSettingsSafeMode', 'shield'),
-      action('Open build options…', 'labwindowsCvi.editBuildOptions', 'tools'),
-      action('Open build options in safe mode…', 'labwindowsCvi.editBuildOptionsSafeMode', 'shield'),
+      action(summary.projectName, 'labwindowsCvi.openProjectFile', 'project', `${summary.workspaceName} · ${summary.projectCount} project${summary.projectCount === 1 ? '' : 's'}`, 'Click to open project file (.prj)'),
+      action('Target type', 'labwindowsCvi.selectTargetType', 'symbol-enum', summary.targetType, 'Click to switch CVI target type (Executable, DLL, Static Library)'),
+      action('Build mode', 'labwindowsCvi.selectBuildMode', 'settings-gear', modeDescription(summary.buildMode), 'Click to switch build mode (Debug/Release, x86/x64)'),
+      action('Command line', 'labwindowsCvi.quickActions.editCommandLine', 'terminal', summary.commandLine, 'Click to edit runtime command-line arguments'),
+      action('Working directory', 'labwindowsCvi.quickActions.editWorkingDirectory', 'folder', summary.workingDirectory, 'Click to edit runtime working directory'),
+      action('Environment', 'labwindowsCvi.quickActions.editEnvironment', 'symbol-key', summary.environment, 'Click to edit runtime environment options'),
+      action('Build steps', 'labwindowsCvi.editTargetSettings', 'list-ordered', summary.buildSteps, 'Click to configure pre-build, custom, and post-build actions'),
+      action('Dependencies', 'labwindowsCvi.editTargetSettings', 'references', summary.dependencies, 'Click to configure project dependencies'),
+      action('Project files', 'workbench.view.extension.labwindowsCvi', summary.hasMissingFiles ? 'warning' : 'pass', summary.files, 'Click to explore project files in CVI workspace view'),
+      action('Target settings…', 'labwindowsCvi.editTargetSettings', 'settings-gear'),
+      action('Build options…', 'labwindowsCvi.editBuildOptions', 'tools'),
+      action('Run options…', 'labwindowsCvi.chooseRunAction', 'list-selection'),
       action('Debug in VS Code', 'labwindowsCvi.debugWithVsCode', 'debug')
     ];
+  }
+
+  async editCommandLine(): Promise<void> {
+    const ref = this.workspaces.activeProjectRef;
+    if (!ref?.exists) {
+      return;
+    }
+    const settings = this.projectSettings.getSettings(ref);
+    const value = await vscode.window.showInputBox({
+      title: `Command-line arguments — ${ref.name}`,
+      prompt: 'Enter command-line arguments to pass when executing this target',
+      value: settings.run.arguments
+    });
+    if (value !== undefined) {
+      settings.run.arguments = value.trim();
+      this.projectSettings.setSettings(ref, settings);
+      this.update();
+    }
+  }
+
+  async editWorkingDirectory(): Promise<void> {
+    const ref = this.workspaces.activeProjectRef;
+    if (!ref?.exists) {
+      return;
+    }
+    const settings = this.projectSettings.getSettings(ref);
+    const value = await vscode.window.showInputBox({
+      title: `Working directory — ${ref.name}`,
+      prompt: 'Enter working directory for execution (leave empty for project directory)',
+      value: settings.run.workingDirectory
+    });
+    if (value !== undefined) {
+      settings.run.workingDirectory = value.trim();
+      this.projectSettings.setSettings(ref, settings);
+      this.update();
+    }
+  }
+
+  async editEnvironment(): Promise<void> {
+    const ref = this.workspaces.activeProjectRef;
+    if (!ref?.exists) {
+      return;
+    }
+    const settings = this.projectSettings.getSettings(ref);
+    const value = await vscode.window.showInputBox({
+      title: `Environment options — ${ref.name}`,
+      prompt: 'Enter environment variables (e.g. VAR1=val;VAR2=val)',
+      value: settings.run.environmentOptions
+    });
+    if (value !== undefined) {
+      settings.run.environmentOptions = value.trim();
+      this.projectSettings.setSettings(ref, settings);
+      this.update();
+    }
   }
 
   dispose(): void {
@@ -130,9 +174,9 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
       projectPath: ref.absolutePath,
       buildMode: this.builds.buildMode,
       targetType: project?.targetType || 'Unknown',
-      commandLine: configuredLabel(settings.run.arguments),
-      workingDirectory: configuredLabel(settings.run.workingDirectory),
-      environment: configuredLabel(settings.run.environmentOptions),
+      commandLine: settings.run.arguments.trim() ? settings.run.arguments.trim() : 'None',
+      workingDirectory: settings.run.workingDirectory.trim() ? settings.run.workingDirectory.trim() : 'Default',
+      environment: settings.run.environmentOptions.trim() ? settings.run.environmentOptions.trim() : 'Default',
       buildSteps: actionTotal === 0 ? 'Empty' : `Pre ${actionCounts[0]} · Custom ${actionCounts[1]} · Post ${actionCounts[2]}`,
       dependencies: settings.dependencies.length === 0 ? 'None' : String(settings.dependencies.length),
       files: missingFiles === 0 ? `${totalFiles} · no missing file` : `${totalFiles} · ${missingFiles} missing`,
@@ -145,11 +189,17 @@ function info(label: string, description: string, icon: string): QuickActionNode
   return { label, description, icon };
 }
 
-function action(label: string, command: string, icon: string): QuickActionNode {
-  return { label, icon, contextValue: 'cviQuickActionCommand', command: { command, title: label } };
+function action(label: string, command: string, icon: string, description?: string, tooltip?: string): QuickActionNode {
+  return {
+    label,
+    icon,
+    description,
+    tooltip: tooltip ?? (description ? `${label}: ${description}` : label),
+    contextValue: 'cviQuickActionCommand',
+    command: { command, title: label }
+  };
 }
 
-function configuredLabel(value: string): string { return value.trim() ? 'Configured' : 'Empty'; }
 function modeDescription(mode: CviBuildMode): string {
   switch (mode) {
     case 'release': return 'Release x86';

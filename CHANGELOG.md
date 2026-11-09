@@ -2,6 +2,27 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.15] - 2026-11-09
+
+### Changed
+- **Show Full Pathnames Menu Action**:
+  - Updated context menu and title bar action label to "Show Full Pathnames" with dynamic checkmark (`✓ Show Full Pathnames`) when pathnames are toggled on.
+- **Home Page Activation & Startup Guard**:
+  - Fixed duplicate Home page tab creation when opening a CVI workspace from an empty VS Code window.
+  - Prevented automatic Home page opening on startup when a VS Code workspace is loaded, preserving the existing editor layout and tab state.
+- **Interactive CVI Actions View**:
+  - Streamlined the "CVI Actions" view by converting read-only status rows into interactive, clickable actions:
+    - *Build Mode*: triggers build mode selection.
+    - *Target Type*: triggers target type selection.
+    - *Command Line Arguments*: interactive prompt to view and edit command line parameters.
+    - *Working Directory*: interactive prompt with file-system folder picker to set the execution working directory.
+    - *Environment Variables*: interactive prompt to set custom execution environment variables.
+  - Added contextual edit buttons on hover for immediate configuration.
+
+### Removed
+- **Safe Mode Fallback Options**:
+  - Completely removed obsolete "Safe Mode" commands (`labwindowsCvi.editTargetSettingsSafeMode`, `labwindowsCvi.editBuildSettingsSafeMode`, `labwindowsCvi.editBuildOptionsSafeMode`) and their toolbar buttons across Target Settings, Build Settings, and Build Options panels.
+
 ## [0.0.14] - 2026-11-09
 
 ### Removed
