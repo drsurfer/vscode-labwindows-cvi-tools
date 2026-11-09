@@ -4,11 +4,18 @@ All notable changes to the "LabWindows/CVI Tools" extension will be documented i
 
 ## [0.0.16] - 2026-11-09
 
+### Added
+- **Parameterized Settings Navigation**:
+  - Enhanced `labwindowsCvi.editTargetSettings` and `labwindowsCvi.editBuildSettings` to accept an optional target tab ID (e.g. `'build'`, `'dependencies'`), enabling direct programmatic and contextual jumps into specific settings sections.
+- **Roadmap & Milestone Tracking**:
+  - Added comprehensive `TODO.md` tracking all completed UX/UI items and outlining upcoming architectural features (Build options completion, alternative compilers, auto-saving settings, removing "Open in CVI" buttons, custom build configurations, and installer generation).
+
 ### Changed
 - **Direct Tab Navigation from CVI Actions**:
-  - Clicking **Build steps** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Build steps** tab.
-  - Clicking **Dependencies** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Dependencies** tab.
-  - Dynamically activates the target tab both when opening the panel fresh and when switching contexts with an already-open settings panel.
+  - Clicking **Build steps** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Build steps** tab (Pre-build, Custom-build, and Post-build actions).
+  - Clicking **Dependencies** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Dependencies** tab (Project dependencies and build order).
+  - Implemented bidirectional Webview messaging (`activatePage`) ensuring that clicking an action immediately reveals, switches to, and scrolls to the target tab even if the settings panel is already open in the background.
+  - Eliminated UI flicker on initial panel load by generating HTML pre-scoped to the requested tab instead of defaulting to Overview.
 
 ## [0.0.15] - 2026-11-09
 
