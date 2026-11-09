@@ -39,11 +39,11 @@
   - Determine if modern VS Code webview reliability and native fallbacks make safe mode obsolete, and remove or replace it with a cleaner alternative if feasible.
   - *Result:* Safely removed obsolete QuickPick-based Safe Mode fallbacks across the extension.
 
-- [ ] **Completamento delle Build options**
-  - Implementare le opzioni rimanenti di compilazione e build ignorate o omesse in prima battuta.
+- [ ] **Complete Build Options coverage**
+  - Implement the remaining compiler and build settings that were initially omitted or deferred.
 
-- [ ] **Valutazione della compilazione con compilatori diversi dal compilatore di default**
-  - Valutare la possibilità, l'architettura e i requisiti per consentire la compilazione di progetti CVI con compilatori alternativi (es. Clang, GCC/MinGW, MSVC).
+- [ ] **Evaluate compilation with alternative compilers**
+  - Assess feasibility, architecture, and requirements to support compiling LabWindows/CVI projects with compilers other than the default CVI toolchain (e.g., Clang, GCC/MinGW, MSVC).
 
 ---
 
@@ -59,6 +59,6 @@
   - **Reverse Engineering**: Analyze binary `.uir` file structure and/or round-trip translation with `.uir` / `.h` code generation.
   - Formulate scope: inspector, visual editor, or code-synchronized UI resource tool.
 
-- [ ] **Gestione dei file di installazione per la generazione di installer MSI e NI Package Manager**
-  - Gestione, parsing e configurazione dei file di distribuzione e installazione CVI (`.cds` / distribution settings).
-  - Supporto per la compilazione e generazione automatizzata di installer Windows (`.msi`) e pacchetti per NI Package Manager (`.nipkg`).
+- [ ] **Distribution & installer generation management (MSI & NI Package Manager)**
+  - Parse, manage, and configure LabWindows/CVI distribution and installer specification files (`.cds` / native distribution settings).
+  - Support automated building and packaging of Windows Installer packages (`.msi`) and NI Package Manager packages (`.nipkg`).
