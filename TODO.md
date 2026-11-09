@@ -45,6 +45,16 @@
 - [ ] **Evaluate compilation with alternative compilers**
   - Assess feasibility, architecture, and requirements to support compiling LabWindows/CVI projects with compilers other than the default CVI toolchain (e.g., Clang, GCC/MinGW, MSVC).
 
+- [ ] **Remove explicit settings saving (auto-save on change)**
+  - Transition settings panels (Project Target Settings, Build Options) from manual "Save" buttons to immediate auto-save on change/blur, aligning with modern VS Code UX.
+
+- [ ] **Remove "Open in CVI" action buttons**
+  - Remove redundant "Open in CVI" buttons from settings webview panels, toolbars, and views.
+
+- [ ] **Custom build configurations management ("Manage Configurations")**
+  - Support user-defined build configurations beyond the four standard targets (`Debug`, `Release`, `Debug64`, `Release64`).
+  - Mirror the native LabWindows/CVI "Manage Configurations" feature (create, duplicate, rename, delete configurations, and customize target settings per configuration).
+
 ---
 
 ## Major Architecture & Feature Roadmap
