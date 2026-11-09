@@ -2,6 +2,14 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.16] - 2026-11-09
+
+### Changed
+- **Direct Tab Navigation from CVI Actions**:
+  - Clicking **Build steps** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Build steps** tab.
+  - Clicking **Dependencies** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Dependencies** tab.
+  - Dynamically activates the target tab both when opening the panel fresh and when switching contexts with an already-open settings panel.
+
 ## [0.0.15] - 2026-11-09
 
 ### Changed

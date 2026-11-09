@@ -86,8 +86,8 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
       action('Command line', 'labwindowsCvi.quickActions.editCommandLine', 'terminal', summary.commandLine, 'Click to edit runtime command-line arguments'),
       action('Working directory', 'labwindowsCvi.quickActions.editWorkingDirectory', 'folder', summary.workingDirectory, 'Click to edit runtime working directory'),
       action('Environment', 'labwindowsCvi.quickActions.editEnvironment', 'symbol-key', summary.environment, 'Click to edit runtime environment options'),
-      action('Build steps', 'labwindowsCvi.editTargetSettings', 'list-ordered', summary.buildSteps, 'Click to configure pre-build, custom, and post-build actions'),
-      action('Dependencies', 'labwindowsCvi.editTargetSettings', 'references', summary.dependencies, 'Click to configure project dependencies'),
+      action('Build steps', 'labwindowsCvi.editTargetSettings', 'list-ordered', summary.buildSteps, 'Click to configure pre-build, custom, and post-build actions', ['build']),
+      action('Dependencies', 'labwindowsCvi.editTargetSettings', 'references', summary.dependencies, 'Click to configure project dependencies', ['dependencies']),
       action('Project files', 'workbench.view.extension.labwindowsCvi', summary.hasMissingFiles ? 'warning' : 'pass', summary.files, 'Click to explore project files in CVI workspace view'),
       action('Target settings…', 'labwindowsCvi.editTargetSettings', 'settings-gear'),
       action('Build options…', 'labwindowsCvi.editBuildOptions', 'tools'),
@@ -189,14 +189,14 @@ function info(label: string, description: string, icon: string): QuickActionNode
   return { label, description, icon };
 }
 
-function action(label: string, command: string, icon: string, description?: string, tooltip?: string): QuickActionNode {
+function action(label: string, command: string, icon: string, description?: string, tooltip?: string, commandArgs?: any[]): QuickActionNode {
   return {
     label,
     icon,
     description,
     tooltip: tooltip ?? (description ? `${label}: ${description}` : label),
     contextValue: 'cviQuickActionCommand',
-    command: { command, title: label }
+    command: { command, title: label, arguments: commandArgs }
   };
 }
 

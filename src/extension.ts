@@ -241,8 +241,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.selectTargetTypeEXE', () => workspaces.selectTargetType()),
     register('labwindowsCvi.selectTargetTypeDLL', () => workspaces.selectTargetType()),
     register('labwindowsCvi.selectTargetTypeLIB', () => workspaces.selectTargetType()),
-    register('labwindowsCvi.editTargetSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
-    register('labwindowsCvi.editBuildSettings', (node?: ProjectNode) => buildSettings.show(node?.ref)),
+    register('labwindowsCvi.editTargetSettings', (nodeOrRefOrPage?: ProjectNode | any | string, page?: string) => {
+      let ref: any = undefined;
+      let targetPage: string | undefined = page;
+      if (typeof nodeOrRefOrPage === 'string') {
+        targetPage = nodeOrRefOrPage;
+      } else if (nodeOrRefOrPage && typeof nodeOrRefOrPage === 'object') {
+        if ('ref' in nodeOrRefOrPage && nodeOrRefOrPage.ref) {
+          ref = nodeOrRefOrPage.ref;
+        } else if ('absolutePath' in nodeOrRefOrPage) {
+          ref = nodeOrRefOrPage;
+        }
+      }
+      return buildSettings.show(ref, targetPage);
+    }),
+    register('labwindowsCvi.editBuildSettings', (nodeOrRefOrPage?: ProjectNode | any | string, page?: string) => {
+      let ref: any = undefined;
+      let targetPage: string | undefined = page;
+      if (typeof nodeOrRefOrPage === 'string') {
+        targetPage = nodeOrRefOrPage;
+      } else if (nodeOrRefOrPage && typeof nodeOrRefOrPage === 'object') {
+        if ('ref' in nodeOrRefOrPage && nodeOrRefOrPage.ref) {
+          ref = nodeOrRefOrPage.ref;
+        } else if ('absolutePath' in nodeOrRefOrPage) {
+          ref = nodeOrRefOrPage;
+        }
+      }
+      return buildSettings.show(ref, targetPage);
+    }),
     register('labwindowsCvi.editBuildOptions', (node?: ProjectNode) => buildOptions.show(node?.ref)),
     register('labwindowsCvi.quickActions.editCommandLine', () => quickActions.editCommandLine()),
     register('labwindowsCvi.quickActions.editWorkingDirectory', () => quickActions.editWorkingDirectory()),
