@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CviParser } from './model/cviParser';
-import { CviTreeProvider, FileNode, FolderNode, ProjectNode } from './providers/cviTreeProvider';
+import { CviTreeProvider, CviTreeNode, FileNode, FolderNode, ProjectNode } from './providers/cviTreeProvider';
 import { CviFileSymbolsProvider } from './providers/cviFileSymbolsProvider';
 import { CviBuildService } from './services/cviBuildService';
 import { CviCppToolsService } from './services/cviCppToolsService';
@@ -76,6 +76,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineFilterOnType', false);
   void vscode.commands.executeCommand('setContext', 'labwindowsCvi.outlineSortMode', 'position');
   const home = new HomePanel(context, workspaces, builds, installations);
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('labwindowsCvi.home', {
+      async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, _state: unknown) {
+        home.attach(webviewPanel);
+      }
+    })
+  );
+  void vscode.commands.executeCommand('setContext', 'labwindowsCvi.showFullFilePaths', vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showFullFilePaths', false));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration('labwindowsCvi.showFullFilePaths')) {
+      const val = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showFullFilePaths', false);
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.showFullFilePaths', val);
+      treeProvider.refresh();
+    }
+  }));
   const buildSettings = new BuildSettingsPanel(workspaces, parser, projectSettings);
   const buildOptions = new BuildOptionsPanel(workspaces, parser, cppTools);
   const quickActions = new QuickActionsView(workspaces, builds, projectSettings);
@@ -259,12 +274,74 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     register('labwindowsCvi.renameFolder', (node?: FolderNode) => node ? workspaces.renameFolder(node.ref, node.folderPath) : undefined),
     register('labwindowsCvi.removeFolder', (node?: FolderNode) => node ? workspaces.removeFolder(node.ref, node.folderPath) : undefined),
-    register('labwindowsCvi.removeFile', (node?: FileNode) => node ? workspaces.removeFile(node.ref, node.file.sectionName, node.file.absolutePath) : undefined),
-    register('labwindowsCvi.excludeFile', (node?: FileNode) => node ? workspaces.setFileExcluded(node.ref, node.file, true) : undefined),
-    register('labwindowsCvi.includeFile', (node?: FileNode) => node ? workspaces.setFileExcluded(node.ref, node.file, false) : undefined),
-    register('labwindowsCvi.toggleObjOption', (node?: FileNode) => node ? workspaces.toggleCompileIntoObjectFile(node.ref, node.file) : undefined),
+    register('labwindowsCvi.openRecent', () => workspaces.promptOpenRecent()),
+    register('labwindowsCvi.toggleShowFullFilePaths', async () => {
+      const config = vscode.workspace.getConfiguration('labwindowsCvi');
+      const current = config.get<boolean>('showFullFilePaths', false);
+      await config.update('showFullFilePaths', !current, vscode.ConfigurationTarget.Global);
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.showFullFilePaths', !current);
+      treeProvider.refresh();
+    }),
+    register('labwindowsCvi.moveItemUp', async (node?: CviTreeNode) => {
+      if (!node) return;
+      if (node.kind === 'file') {
+        await workspaces.moveFileUp(node.ref, node.file.sectionName);
+      } else if (node.kind === 'folder') {
+        await workspaces.moveFolderUp(node.ref, node.folderPath);
+      }
+    }),
+    register('labwindowsCvi.moveItemDown', async (node?: CviTreeNode) => {
+      if (!node) return;
+      if (node.kind === 'file') {
+        await workspaces.moveFileDown(node.ref, node.file.sectionName);
+      } else if (node.kind === 'folder') {
+        await workspaces.moveFolderDown(node.ref, node.folderPath);
+      }
+    }),
+    register('labwindowsCvi.removeFile', async (node?: FileNode, allSelected?: CviTreeNode[]) => {
+      const files = getSelectedFiles(node, allSelected);
+      for (const f of files) {
+        await workspaces.removeFile(f.ref, f.file.sectionName, f.file.absolutePath);
+      }
+    }),
+    register('labwindowsCvi.excludeFile', async (node?: FileNode, allSelected?: CviTreeNode[]) => {
+      const files = getSelectedFiles(node, allSelected);
+      for (const f of files) {
+        await workspaces.setFileExcluded(f.ref, f.file, true);
+      }
+    }),
+    register('labwindowsCvi.includeFile', async (node?: FileNode, allSelected?: CviTreeNode[]) => {
+      const files = getSelectedFiles(node, allSelected);
+      for (const f of files) {
+        await workspaces.setFileExcluded(f.ref, f.file, false);
+      }
+    }),
+    register('labwindowsCvi.toggleObjOption', async (node?: FileNode, allSelected?: CviTreeNode[]) => {
+      const files = getSelectedFiles(node, allSelected);
+      for (const f of files) {
+        await workspaces.toggleCompileIntoObjectFile(f.ref, f.file);
+      }
+    }),
     register('labwindowsCvi.replaceFile', (node?: FileNode) => node ? workspaces.replaceFile(node.ref, node.file) : undefined),
-    register('labwindowsCvi.moveFileToFolder', (node?: FileNode) => node ? workspaces.moveFileToFolder(node.ref, node.file) : undefined),
+    register('labwindowsCvi.moveFileToFolder', async (node?: FileNode, allSelected?: CviTreeNode[]) => {
+      const files = getSelectedFiles(node, allSelected);
+      if (files.length === 1) {
+        await workspaces.moveFileToFolder(files[0].ref, files[0].file);
+      } else if (files.length > 1) {
+        const ref = files[0].ref;
+        const project = workspaces.getProject(ref);
+        if (!project) return;
+        const folders = project.folders;
+        const items = [
+          { label: '$(root-folder) Project root', description: 'No logical folder', targetFolder: '' },
+          ...folders.map((f) => ({ label: f, description: 'CVI virtual folder', targetFolder: f }))
+        ];
+        const picked = await vscode.window.showQuickPick(items, { title: `Move ${files.length} Files to Folder` });
+        if (picked) {
+          await workspaces.moveFilesToFolder(ref, files.map((f) => f.file.sectionName), picked.targetFolder);
+        }
+      }
+    }),
     register('labwindowsCvi.compileFile', (node?: FileNode) => node ? builds.compileFile(node.file.absolutePath, node.ref) : undefined),
     register('labwindowsCvi.generatePrototypes', (node?: FileNode) => node ? workspaces.generatePrototypes(node.ref, node.file) : undefined),
     register('labwindowsCvi.prepareDllImportLibraryGeneration', (node?: FileNode) => node ? builds.prepareDllImportLibraryGeneration(node.file.absolutePath) : undefined),
@@ -399,7 +476,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const showOnStartup = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showHomeOnStartup', true);
   if (showOnStartup) {
-    home.show();
+    home.showOnStartup();
   }
 }
 
@@ -455,4 +532,15 @@ function formatIntegerLiteral(literal: string, target: IntegerLiteralTarget): st
 
 export function deactivate(): void {
   // Resources are disposed through context.subscriptions.
+}
+
+
+function getSelectedFiles(node?: FileNode, allSelected?: CviTreeNode[]): FileNode[] {
+  if (allSelected && allSelected.length > 0) {
+    const files = allSelected.filter((n): n is FileNode => n.kind === 'file');
+    if (files.length > 0) {
+      return files;
+    }
+  }
+  return node && node.kind === 'file' ? [node] : [];
 }

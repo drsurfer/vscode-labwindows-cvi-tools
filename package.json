@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -81,7 +81,7 @@
     "viewsWelcome": [
       {
         "view": "labwindowsCvi.workspaceExplorer",
-        "contents": "No LabWindows/CVI workspace is currently loaded.\n[Open a workspace](command:labwindowsCvi.openWorkspace)\n[Create a workspace and project](command:labwindowsCvi.createWorkspaceProject)\n[Open the CVI home page](command:labwindowsCvi.openHome)"
+        "contents": "No LabWindows/CVI workspace is currently loaded.\n[Open a workspace](command:labwindowsCvi.openWorkspace)\n[Create a workspace and project](command:labwindowsCvi.createWorkspaceProject)"
       }
     ],
     "commands": [
@@ -777,6 +777,26 @@
         "title": "LabWindows/CVI: Export Resource Tracking Report",
         "icon": "$(save)",
         "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.openRecent",
+        "title": "LabWindows/CVI: Open Recent Workspace or Project...",
+        "icon": "$(history)"
+      },
+      {
+        "command": "labwindowsCvi.toggleShowFullFilePaths",
+        "title": "LabWindows/CVI: Toggle Full File Paths in Project Tree",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemUp",
+        "title": "Move Up",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemDown",
+        "title": "Move Down",
+        "icon": "$(arrow-down)"
       }
     ],
     "menus": {
@@ -975,6 +995,16 @@
           "command": "labwindowsCvi.clearResourceTracking",
           "when": "view == labwindowsCvi.resourceTracking",
           "group": "navigation@3"
+        },
+        {
+          "command": "labwindowsCvi.openRecent",
+          "when": "view == labwindowsCvi.workspaceExplorer",
+          "group": "navigation@2.5"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer",
+          "group": "navigation@10"
         }
       ],
       "view/item/context": [
@@ -1287,6 +1317,51 @@
           "command": "labwindowsCvi.copyFileSymbolDeclaration",
           "when": "view == labwindowsCvi.fileSymbols && viewItem == cviFileSymbol",
           "group": "clipboard@2"
+        },
+        {
+          "command": "labwindowsCvi.openRecent",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace",
+          "group": "view@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemUp",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "group": "ordering@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemDown",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "group": "ordering@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemUp",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "group": "ordering@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemDown",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "group": "ordering@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "group": "view@1"
         }
       ],
       "commandPalette": [
@@ -1850,6 +1925,26 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notification with leak details when a debugged CVI program terminates with unreleased resources."
+        },
+        "labwindowsCvi.openProjectWorkspaceBehavior": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "openWorkspace",
+            "openStandalone"
+          ],
+          "enumDescriptions": [
+            "Prompt to confirm whether to open the associated parent CVI workspace (.cws) or open the project standalone.",
+            "Automatically locate and open the associated parent CVI workspace (.cws) if found.",
+            "Always open the project standalone in a temporary workspace context."
+          ],
+          "default": "prompt",
+          "description": "Behavior when opening a standalone LabWindows/CVI project (.prj)."
+        },
+        "labwindowsCvi.showFullFilePaths": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show full file paths in the LabWindows/CVI project tree view instead of file names only."
         }
       }
     },
@@ -1869,6 +1964,16 @@
         "command": "labwindowsCvi.debugWithVsCode",
         "key": "f5",
         "when": "!inDebugMode && (resourceExtname == .c || resourceExtname == .h || resourceExtname == .prj || editorLangId == c || editorLangId == cpp)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemUp",
+        "key": "alt+up",
+        "when": "focusedView == labwindowsCvi.workspaceExplorer"
+      },
+      {
+        "command": "labwindowsCvi.moveItemDown",
+        "key": "alt+down",
+        "when": "focusedView == labwindowsCvi.workspaceExplorer"
       }
     ],
     "submenus": [

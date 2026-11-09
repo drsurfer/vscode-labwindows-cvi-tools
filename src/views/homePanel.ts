@@ -30,9 +30,36 @@ export class HomePanel implements vscode.Disposable {
     }
   }
 
-  show(): void {
+  isOpen(): boolean {
     if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.One);
+      return true;
+    }
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (tab.input instanceof vscode.TabInputWebview && tab.input.viewType === 'labwindowsCvi.home') {
+          return true;
+        }
+        if (tab.input && typeof tab.input === 'object' && 'viewType' in tab.input && (tab.input as any).viewType === 'labwindowsCvi.home') {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  attach(panel: vscode.WebviewPanel): void {
+    if (this.panel && this.panel !== panel) {
+      panel.dispose();
+      return;
+    }
+    this.panel = panel;
+    this.configurePanel();
+    this.update();
+  }
+
+  show(options?: { preserveFocus?: boolean }): void {
+    if (this.panel) {
+      this.panel.reveal(this.panel.viewColumn ?? vscode.ViewColumn.One, options?.preserveFocus);
       this.update();
       return;
     }
@@ -40,13 +67,28 @@ export class HomePanel implements vscode.Disposable {
     this.panel = vscode.window.createWebviewPanel(
       'labwindowsCvi.home',
       'LabWindows/CVI Home',
-      vscode.ViewColumn.One,
+      { viewColumn: vscode.ViewColumn.One, preserveFocus: options?.preserveFocus ?? false },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
         localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
       }
     );
+    this.configurePanel();
+    this.update();
+  }
+
+  showOnStartup(): void {
+    if (this.isOpen()) {
+      return;
+    }
+    this.show({ preserveFocus: true });
+  }
+
+  private configurePanel(): void {
+    if (!this.panel) {
+      return;
+    }
     this.updateTabIcon();
     this.panel.onDidDispose(() => { this.panel = undefined; });
     this.panel.webview.onDidReceiveMessage(async (message: { command?: string; value?: any }) => {
@@ -63,10 +105,24 @@ export class HomePanel implements vscode.Disposable {
         await vscode.env.openExternal(vscode.Uri.parse(message.value));
         return;
       }
+      if (message.command === 'openRecentPath' && typeof message.value === 'string') {
+        await this.workspaces.openProjectOrWorkspace(message.value);
+        this.update();
+        return;
+      }
+      if (message.command === 'removeRecentPath' && typeof message.value === 'string') {
+        await this.workspaces.removeRecentItem(message.value);
+        this.update();
+        return;
+      }
+      if (message.command === 'clearRecentItems') {
+        await this.workspaces.clearRecentItems();
+        this.update();
+        return;
+      }
       await vscode.commands.executeCommand(message.command);
       this.update();
     });
-    this.update();
   }
 
   private updateTabIcon(): void {
@@ -156,6 +212,14 @@ export class HomePanel implements vscode.Disposable {
     const extensionVersion = String(this.context.extension?.packageJSON?.version ?? '0.0.0');
     const showAtStartup = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showHomeOnStartup', true);
 
+    const rawRecents = this.workspaces.getRecentItems();
+    const recentItems = rawRecents.map((item) => ({
+      path: item.path,
+      name: item.name,
+      type: item.type,
+      formattedTime: formatRelativeTime(item.lastOpened)
+    }));
+
     this.panel.webview.html = renderHtml({
       workspace: workspace?.path,
       workspaceName: workspace?.name,
@@ -171,7 +235,8 @@ export class HomePanel implements vscode.Disposable {
       showAtStartup,
       hasProject: Boolean(activeProject?.absolutePath),
       logoSvg: this.loadLogoSvg(),
-      cspSource: this.panel.webview.cspSource
+      cspSource: this.panel.webview.cspSource,
+      recentItems
     });
   }
 }
@@ -192,6 +257,7 @@ interface HomeState {
   hasProject: boolean;
   logoSvg: string;
   cspSource: string;
+  recentItems: Array<{ path: string; name: string; type: 'workspace' | 'project'; formattedTime: string }>;
 }
 
 function renderHtml(state: HomeState): string {
@@ -535,6 +601,17 @@ function renderHtml(state: HomeState): string {
     .primary-row button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
     .installation-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; }
     .installation-card .actions { margin-top: 0; justify-content: flex-end; }
+    .recent-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 10px; margin-top: 10px; }
+    .recent-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+    .recent-card:hover { border-color: var(--vscode-focusBorder, #007acc); background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05)); }
+    .recent-content { flex: 1; min-width: 0; }
+    .recent-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .recent-card .icon-btn { padding: 4px 8px; font-size: 14px; line-height: 1; background: transparent; border: 1px solid transparent; color: var(--vscode-descriptionForeground); }
+    .recent-card .icon-btn:hover { color: var(--vscode-foreground); border-color: var(--vscode-panel-border); background: var(--vscode-button-secondaryBackground); }
+    .recent-badge-ws { background: #007acc; color: #fff; }
+    .recent-badge-prj { background: #16825d; color: #fff; }
+    .mini-btn { font-size: 11px; padding: 2px 8px; }
+
     @media (max-width: 860px) {
       .hero-panel { flex-direction: column; text-align: center; }
       .welcome-row { flex-direction: column; align-items: flex-start; gap: 12px; }
@@ -645,6 +722,41 @@ function renderHtml(state: HomeState): string {
           </div>
         </section>
 
+        <!-- RECENT WORKSPACES & PROJECTS -->
+        <section class="section">
+          <div class="section-heading">
+            <h2>Recent workspaces and projects</h2>
+            <div>
+              <span>${state.recentItems.length} item${state.recentItems.length === 1 ? '' : 's'}</span>
+              ${state.recentItems.length > 0 ? '<button class="secondary mini-btn" data-command="clearRecentItems" title="Clear all recent entries" style="margin-left: 10px;">Clear all</button>' : ''}
+            </div>
+          </div>
+          ${state.recentItems.length === 0 ? `
+            <article class="card">
+              <p class="muted">No recent LabWindows/CVI workspaces or projects. Opened .cws and .prj files will appear here for fast access.</p>
+            </article>` : `
+            <div class="recent-grid">
+              ${state.recentItems.map((item) => `
+                <article class="card recent-card" data-recent-path="${escapeHtml(item.path)}" title="Click to open ${escapeHtml(item.name)}">
+                  <div class="recent-content">
+                    <div class="card-header" style="margin-bottom: 4px;">
+                      <div class="tile-icon ${item.type === 'workspace' ? 'recent-badge-ws' : 'recent-badge-prj'}" style="width: 28px; height: 28px; font-size: 10px; border-radius: 6px;">${item.type === 'workspace' ? 'WS' : 'PRJ'}</div>
+                      <div class="title-stack">
+                        <strong>${escapeHtml(item.name)}</strong>
+                        <small>${escapeHtml(item.formattedTime)} · ${item.type === 'workspace' ? 'Workspace (.cws)' : 'Project (.prj)'}</small>
+                      </div>
+                    </div>
+                    <div class="path" style="margin: 4px 0 0; font-size: 11px; padding: 4px 7px;">${escapeHtml(item.path)}</div>
+                  </div>
+                  <div class="recent-actions">
+                    <button class="secondary recent-open-btn" data-open-path="${escapeHtml(item.path)}" title="Open ${escapeHtml(item.name)}">Open</button>
+                    <button class="secondary icon-btn" data-remove-path="${escapeHtml(item.path)}" title="Remove from recent list">&times;</button>
+                  </div>
+                </article>
+              `).join('')}
+            </div>`}
+        </section>
+
         <!-- LIBRARIES AND REUSABLE TOOLS -->
         <section class="section">
           <div class="section-heading">
@@ -739,7 +851,37 @@ function renderHtml(state: HomeState): string {
       });
     });
 
-    // Show at startup checkbox
+    // Recent items click handlers
+    document.querySelectorAll('[data-open-path]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const p = btn.getAttribute('data-open-path');
+        if (p) {
+          vscode.postMessage({ command: 'openRecentPath', value: p });
+        }
+      });
+    });
+
+    document.querySelectorAll('[data-remove-path]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const p = btn.getAttribute('data-remove-path');
+        if (p) {
+          vscode.postMessage({ command: 'removeRecentPath', value: p });
+        }
+      });
+    });
+
+    document.querySelectorAll('.recent-card').forEach((card) => {
+      card.addEventListener('click', () => {
+        const p = card.getAttribute('data-recent-path');
+        if (p) {
+          vscode.postMessage({ command: 'openRecentPath', value: p });
+        }
+      });
+    });
+
+        // Show at startup checkbox
     const showAtStartupCheckbox = document.getElementById('showAtStartup');
     if (showAtStartupCheckbox) {
       showAtStartupCheckbox.addEventListener('change', (e) => {
@@ -767,4 +909,30 @@ function makeNonce(): string {
     result += characters.charAt(Math.floor(Math.random() * characters.length));
   }
   return result;
+}
+
+
+function formatRelativeTime(timestamp: number): string {
+  const diffMs = Date.now() - timestamp;
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) {
+    return 'Just now';
+  }
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) {
+    return `${diffMin}m ago`;
+  }
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) {
+    return `${diffHr}h ago`;
+  }
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays === 1) {
+    return 'Yesterday';
+  }
+  if (diffDays < 7) {
+    return `${diffDays}d ago`;
+  }
+  const date = new Date(timestamp);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }

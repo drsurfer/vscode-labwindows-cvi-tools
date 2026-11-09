@@ -2,6 +2,30 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.14] - 2026-11-09
+
+### Removed
+- **Redundant "Open the CVI home page" Action**:
+  - Removed duplicate action link from empty workspace explorer view welcome content. The Home page remains accessible via the title bar and status bar home actions.
+
+### Added
+- **Home Page Single-Instance Activation Guard**:
+  - Implemented `WebviewPanelSerializer` to restore existing Home page instances across window reloads without duplicating tabs.
+  - Added startup guard preventing duplicate tabs and redundant focus stealing on extension activation.
+- **Recent Workspaces & Projects Management**:
+  - Added global history tracking for recently opened CVI workspaces (`.cws`) and projects (`.prj`).
+  - Added interactive "Recent workspaces and projects" section to the CVI Home page with quick opening and item removal.
+  - Added `labwindowsCvi.openRecent` quick-pick command (`$(history)`) with inline removal and clear-all actions.
+  - Implemented intelligent associated workspace detection for standalone `.prj` files with configurable behavior (`labwindowsCvi.openProjectWorkspaceBehavior`: `prompt`, `openWorkspace`, or `openStandalone`).
+- **Project Tree View: Native CVI Layout, Ordering & Drag-and-Drop**:
+  - Eliminated synthetic/automatic folder hierarchies in favor of faithful LabWindows/CVI virtual folders matching `.prj` declarations.
+  - Files not assigned to a folder or marked `Not In A Folder` are placed directly at the project root.
+  - Exact preservation of folder and file order matching `.prj` sequence (`[Folders]` and `[File XXXX]` declarations) without alphabetical sorting.
+  - Added manual reordering commands (`labwindowsCvi.moveItemUp`, `labwindowsCvi.moveItemDown`) with `Alt+Up` / `Alt+Down` shortcut support.
+  - Added full drag-and-drop reordering: drag files before other files or into virtual folders/root; reorder virtual folders in `[Folders]`.
+  - Added context menu and title bar toggle for **Full File Paths** (`labwindowsCvi.toggleShowFullFilePaths` / `labwindowsCvi.showFullFilePaths`) switching between file name only and complete path display.
+  - Added multi-select batch support for contextual file actions (exclude, include, remove, toggle `.obj` compile, move to folder).
+
 ## [0.0.13] - 2026-11-05
 
 ### Added

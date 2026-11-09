@@ -652,7 +652,7 @@ export class CviParser {
           sectionName: section.name,
           id,
           type: unquote(section.get('File Type')) ?? 'Other',
-          folder: unquote(section.get('Folder')) ?? defaultFolderForType(unquote(section.get('File Type')) ?? 'Other'),
+          folder: (!unquote(section.get('Folder')) || unquote(section.get('Folder')) === 'Not In A Folder') ? '' : unquote(section.get('Folder'))!,
           relativePath: resolved.relativePath,
           absolutePath: resolved.absolutePath,
           excluded: parseBoolean(section.get('Exclude')),
@@ -1326,7 +1326,7 @@ export class CviParser {
       }
 
       const fileType = fileTypeForPath(filePath);
-      const folder = folderOverride?.trim() || defaultFolderForType(fileType);
+      const folder = folderOverride !== undefined ? folderOverride.trim() : '';
       const relativePath = normalizeRelativePath(projectDirectory, filePath);
       const sectionName = `File ${String(nextId).padStart(4, '0')}`;
       const section = new IniSection(sectionName, []);
@@ -1341,10 +1341,12 @@ export class CviParser {
         section.set('Compile Into Object File', 'False');
       }
       section.set('Project Flags', '0');
-      section.set('Folder', quote(folder));
+      section.set('Folder', quote(folder ? folder : 'Not In A Folder'));
       section.lines.push('');
       document.addSection(section, 'Folders');
-      this.ensureProjectFolder(document, folder);
+      if (folder) {
+        this.ensureProjectFolder(document, folder);
+      }
       existingFiles.push(normalized);
       nextId += 1;
       added += 1;
@@ -1560,11 +1562,12 @@ export class CviParser {
       if (!sectionNameSet.has(section.name)) {
         continue;
       }
-      const currentFolder = normalizeLogicalFolder(unquote(section.get('Folder')) ?? '');
+      const rawCurrent = unquote(section.get('Folder'));
+      const currentFolder = (!rawCurrent || rawCurrent === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawCurrent);
       if (currentFolder.toLowerCase() === normalizedFolder.toLowerCase()) {
         continue;
       }
-      section.set('Folder', quote(normalizedFolder));
+      section.set('Folder', quote(normalizedFolder ? normalizedFolder : 'Not In A Folder'));
       moved += 1;
     }
 
@@ -1575,6 +1578,195 @@ export class CviParser {
       writeText(projectPath, document.toString());
     }
     return moved;
+  }
+
+  moveFileBefore(projectPath: string, sectionName: string, targetSectionName?: string, targetFolder?: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const sectionIndex = fileSections.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (sectionIndex < 0) {
+      return false;
+    }
+    const section = fileSections[sectionIndex];
+    if (targetFolder !== undefined) {
+      const normalizedTarget = normalizeLogicalFolder(targetFolder);
+      section.set('Folder', quote(normalizedTarget ? normalizedTarget : 'Not In A Folder'));
+      if (normalizedTarget) {
+        this.ensureProjectFolder(document, normalizedTarget);
+      }
+    }
+    fileSections.splice(sectionIndex, 1);
+    const targetIndex = targetSectionName
+      ? fileSections.findIndex((s) => s.name.toLowerCase() === targetSectionName.toLowerCase())
+      : -1;
+    if (targetIndex >= 0) {
+      fileSections.splice(targetIndex, 0, section);
+    } else {
+      fileSections.push(section);
+    }
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFileUp(projectPath: string, sectionName: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const target = fileSections.find((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (!target) {
+      return false;
+    }
+    const rawTargetFolder = unquote(target.get('Folder'));
+    const targetFolder = (!rawTargetFolder || rawTargetFolder === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawTargetFolder);
+    const siblings = fileSections.filter((s) => {
+      const raw = unquote(s.get('Folder'));
+      const f = (!raw || raw === 'Not In A Folder') ? '' : normalizeLogicalFolder(raw);
+      return f.toLowerCase() === targetFolder.toLowerCase();
+    });
+    const siblingIndex = siblings.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (siblingIndex <= 0) {
+      return false;
+    }
+    const prevSibling = siblings[siblingIndex - 1];
+    const prevGlobalIndex = fileSections.indexOf(prevSibling);
+    const targetGlobalIndex = fileSections.indexOf(target);
+    fileSections.splice(targetGlobalIndex, 1);
+    fileSections.splice(prevGlobalIndex, 0, target);
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFileDown(projectPath: string, sectionName: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const target = fileSections.find((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (!target) {
+      return false;
+    }
+    const rawTargetFolder = unquote(target.get('Folder'));
+    const targetFolder = (!rawTargetFolder || rawTargetFolder === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawTargetFolder);
+    const siblings = fileSections.filter((s) => {
+      const raw = unquote(s.get('Folder'));
+      const f = (!raw || raw === 'Not In A Folder') ? '' : normalizeLogicalFolder(raw);
+      return f.toLowerCase() === targetFolder.toLowerCase();
+    });
+    const siblingIndex = siblings.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (siblingIndex < 0 || siblingIndex >= siblings.length - 1) {
+      return false;
+    }
+    const nextSibling = siblings[siblingIndex + 1];
+    const nextGlobalIndex = fileSections.indexOf(nextSibling);
+    const targetGlobalIndex = fileSections.indexOf(target);
+    fileSections.splice(targetGlobalIndex, 1);
+    fileSections.splice(nextGlobalIndex, 0, target);
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderBefore(projectPath: string, folder: string, targetFolder?: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    const normalizedTarget = targetFolder ? normalizeLogicalFolder(targetFolder) : undefined;
+    if (!normalized || normalized.toLowerCase() === normalizedTarget?.toLowerCase()) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx >= 0) {
+      existing.splice(idx, 1);
+    }
+    const targetIdx = normalizedTarget ? existing.findIndex((f) => f.toLowerCase() === normalizedTarget.toLowerCase()) : -1;
+    if (targetIdx >= 0) {
+      existing.splice(targetIdx, 0, normalized);
+    } else {
+      existing.push(normalized);
+    }
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderUp(projectPath: string, folder: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    if (!normalized) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx <= 0) {
+      return false;
+    }
+    const temp = existing[idx - 1];
+    existing[idx - 1] = existing[idx];
+    existing[idx] = temp;
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderDown(projectPath: string, folder: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    if (!normalized) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx < 0 || idx >= existing.length - 1) {
+      return false;
+    }
+    const temp = existing[idx + 1];
+    existing[idx + 1] = existing[idx];
+    existing[idx] = temp;
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  private rewriteFoldersSection(foldersSection: IniSection, folders: string[]): void {
+    const preserved = foldersSection.entries().filter(({ key }) => !/^Folder \d+$/i.test(key));
+    foldersSection.deleteMatching(/^Folder \d+$/i);
+    preserved.forEach(({ key, value }) => foldersSection.set(key, value));
+    folders.forEach((folder, index) => foldersSection.set(`Folder ${index}`, quote(folder)));
+  }
+
+  private resequenceFileSections(document: IniDocument, fileSections: IniSection[]): void {
+    const firstIndex = document.sections.findIndex((s) => /^File \d{4}$/i.test(s.name));
+    document.sections.splice(0, document.sections.length, ...document.sections.filter((s) => !/^File \d{4}$/i.test(s.name)));
+    fileSections.forEach((section, index) => {
+      const newName = `File ${String(index + 1).padStart(4, '0')}`;
+      section.name = newName;
+      section.set('Res Id', String(index + 1));
+    });
+    if (firstIndex >= 0) {
+      document.sections.splice(firstIndex, 0, ...fileSections);
+    } else {
+      const foldersIndex = document.sections.findIndex((s) => s.name.toLowerCase() === 'folders');
+      if (foldersIndex >= 0) {
+        document.sections.splice(foldersIndex, 0, ...fileSections);
+      } else {
+        document.sections.push(...fileSections);
+      }
+    }
+    const header = document.getSection('Project Header');
+    if (header) {
+      header.set('Number of Files', String(fileSections.length));
+    }
   }
 
   createWorkspaceAndProject(rootDirectory: string, workspaceName: string, projectName: string, targetType: string, cviDir: string | undefined, formatVersion: number): { workspacePath: string; projectPath: string } {
