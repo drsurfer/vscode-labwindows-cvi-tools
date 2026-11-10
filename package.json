@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.13",
+  "version": "0.0.17",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -75,13 +75,20 @@
           "contextualTitle": "LabWindows/CVI Resources",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
+        },
+        {
+          "id": "labwindowsCvi.processThreads",
+          "name": "CVI Process Threads",
+          "contextualTitle": "LabWindows/CVI Process Threads",
+          "icon": "media/cvi-tools.svg",
+          "showCollapseAll": true
         }
       ]
     },
     "viewsWelcome": [
       {
         "view": "labwindowsCvi.workspaceExplorer",
-        "contents": "No LabWindows/CVI workspace is currently loaded.\n[Open a workspace](command:labwindowsCvi.openWorkspace)\n[Create a workspace and project](command:labwindowsCvi.createWorkspaceProject)\n[Open the CVI home page](command:labwindowsCvi.openHome)"
+        "contents": "No LabWindows/CVI workspace is currently loaded.\n[Open a workspace](command:labwindowsCvi.openWorkspace)\n[Create a workspace and project](command:labwindowsCvi.createWorkspaceProject)"
       }
     ],
     "commands": [
@@ -481,21 +488,9 @@
         "category": "LabWindows/CVI"
       },
       {
-        "command": "labwindowsCvi.editTargetSettingsSafeMode",
-        "title": "Target Settings (Safe Mode)…",
-        "icon": "$(shield)",
-        "category": "LabWindows/CVI"
-      },
-      {
         "command": "labwindowsCvi.editBuildOptions",
         "title": "Build Options...",
         "icon": "$(tools)",
-        "category": "LabWindows/CVI"
-      },
-      {
-        "command": "labwindowsCvi.editBuildOptionsSafeMode",
-        "title": "Build Options (Safe Mode)…",
-        "icon": "$(shield)",
         "category": "LabWindows/CVI"
       },
       {
@@ -777,6 +772,64 @@
         "title": "LabWindows/CVI: Export Resource Tracking Report",
         "icon": "$(save)",
         "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.manageConfigurations",
+        "title": "LabWindows/CVI: Manage Configurations...",
+        "icon": "$(tools)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.refreshProcessThreads",
+        "title": "Refresh Process Threads",
+        "icon": "$(refresh)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.pauseAllThreads",
+        "title": "Pause Process Threads",
+        "icon": "$(debug-pause)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.openRecent",
+        "title": "LabWindows/CVI: Open Recent Workspace or Project...",
+        "icon": "$(history)"
+      },
+      {
+        "command": "labwindowsCvi.toggleShowFullFilePaths",
+        "title": "Show Full Pathnames",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+        "title": "✓ Show Full Pathnames",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemUp",
+        "title": "Move Up",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemDown",
+        "title": "Move Down",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editCommandLine",
+        "title": "Edit Command Line Arguments",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editWorkingDirectory",
+        "title": "Edit Working Directory",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.quickActions.editEnvironment",
+        "title": "Edit Environment Variables",
+        "category": "LabWindows/CVI"
       }
     ],
     "menus": {
@@ -975,6 +1028,31 @@
           "command": "labwindowsCvi.clearResourceTracking",
           "when": "view == labwindowsCvi.resourceTracking",
           "group": "navigation@3"
+        },
+        {
+          "command": "labwindowsCvi.refreshProcessThreads",
+          "when": "view == labwindowsCvi.processThreads",
+          "group": "navigation@1"
+        },
+        {
+          "command": "labwindowsCvi.pauseAllThreads",
+          "when": "view == labwindowsCvi.processThreads",
+          "group": "navigation@2"
+        },
+        {
+          "command": "labwindowsCvi.openRecent",
+          "when": "view == labwindowsCvi.workspaceExplorer",
+          "group": "navigation@2.5"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && labwindowsCvi.showFullFilePaths",
+          "group": "navigation@10"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && !labwindowsCvi.showFullFilePaths",
+          "group": "navigation@10"
         }
       ],
       "view/item/context": [
@@ -1254,19 +1332,9 @@
           "group": "settings@2"
         },
         {
-          "command": "labwindowsCvi.editTargetSettingsSafeMode",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
-          "group": "settings@3"
-        },
-        {
           "command": "labwindowsCvi.editBuildOptions",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
           "group": "settings@4"
-        },
-        {
-          "command": "labwindowsCvi.editBuildOptionsSafeMode",
-          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject",
-          "group": "settings@5"
         },
         {
           "command": "labwindowsCvi.generatePrototypes",
@@ -1287,6 +1355,71 @@
           "command": "labwindowsCvi.copyFileSymbolDeclaration",
           "when": "view == labwindowsCvi.fileSymbols && viewItem == cviFileSymbol",
           "group": "clipboard@2"
+        },
+        {
+          "command": "labwindowsCvi.openRecent",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace && labwindowsCvi.showFullFilePaths",
+          "group": "view@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace && !labwindowsCvi.showFullFilePaths",
+          "group": "view@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviProject && !labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemUp",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "group": "ordering@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemDown",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder",
+          "group": "ordering@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviFolder && !labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemUp",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "group": "ordering@1"
+        },
+        {
+          "command": "labwindowsCvi.moveItemDown",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./",
+          "group": "ordering@2"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePathsOn",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./ && labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
+        },
+        {
+          "command": "labwindowsCvi.toggleShowFullFilePaths",
+          "when": "view == labwindowsCvi.workspaceExplorer && viewItem =~ /^cviFile\\./ && !labwindowsCvi.showFullFilePaths",
+          "group": "view@1"
         }
       ],
       "commandPalette": [
@@ -1690,6 +1823,13 @@
           "default": "",
           "description": "Optional CVI custom build configuration name passed through -config=..."
         },
+        "labwindowsCvi.numberOfConcurrentCompiles": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 32,
+          "description": "Specifies the number of concurrent compiler worker processes to spawn during project builds. Set to 0 to automatically utilize all logical CPU cores."
+        },
         "labwindowsCvi.extraCompilerArguments": {
           "type": "array",
           "default": [],
@@ -1850,6 +1990,26 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notification with leak details when a debugged CVI program terminates with unreleased resources."
+        },
+        "labwindowsCvi.openProjectWorkspaceBehavior": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "openWorkspace",
+            "openStandalone"
+          ],
+          "enumDescriptions": [
+            "Prompt to confirm whether to open the associated parent CVI workspace (.cws) or open the project standalone.",
+            "Automatically locate and open the associated parent CVI workspace (.cws) if found.",
+            "Always open the project standalone in a temporary workspace context."
+          ],
+          "default": "prompt",
+          "description": "Behavior when opening a standalone LabWindows/CVI project (.prj)."
+        },
+        "labwindowsCvi.showFullFilePaths": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show full file paths in the LabWindows/CVI project tree view instead of file names only."
         }
       }
     },
@@ -1869,6 +2029,16 @@
         "command": "labwindowsCvi.debugWithVsCode",
         "key": "f5",
         "when": "!inDebugMode && (resourceExtname == .c || resourceExtname == .h || resourceExtname == .prj || editorLangId == c || editorLangId == cpp)"
+      },
+      {
+        "command": "labwindowsCvi.moveItemUp",
+        "key": "alt+up",
+        "when": "focusedView == labwindowsCvi.workspaceExplorer"
+      },
+      {
+        "command": "labwindowsCvi.moveItemDown",
+        "key": "alt+down",
+        "when": "focusedView == labwindowsCvi.workspaceExplorer"
       }
     ],
     "submenus": [

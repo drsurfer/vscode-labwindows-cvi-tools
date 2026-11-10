@@ -73,6 +73,14 @@ export interface CviNativeTargetSettings {
   signing: CviSigningSettings;
 }
 
+export interface CviCustomBuildConfig {
+  index: number;
+  name: string;
+  sectionName: string;
+  is64Bit: boolean;
+  isRelease: boolean;
+}
+
 export interface CviBuildOptions {
   callingConvention: string;
   stackReserve: number;
@@ -91,6 +99,14 @@ export interface CviBuildOptions {
   precompiledIncludeFile: string;
   disabledWarningIds: number[];
   errorWarningIds: number[];
+  requirePrototypes: boolean;
+  requireReturnValues: boolean;
+  uninitializedLocalsCompile: 'None' | 'Conservative' | 'Aggressive';
+  enableUnreferencedIdentifiersWarning: boolean;
+  enablePointerMismatchWarning: boolean;
+  enableUnreachableCodeWarning: boolean;
+  enableAssignmentInConditionalWarning: boolean;
+  concurrentCompiles: number;
 }
 
 function readText(filePath: string): string {
@@ -205,13 +221,40 @@ function setPossiblyLongStringValue(section: IniSection, key: string, value: str
   chunks.forEach((chunk, index) => section.set(`${key} Line${String(index + 1).padStart(4, '0')}`, quote(chunk)));
 }
 
-function getProjectModeSection(document: IniDocument, mode: CviBuildMode): IniSection {
-  const sectionName = `Default Build Config ${modeSuffix(mode)}`;
-  const section = document.getSection(sectionName);
-  if (!section) {
-    throw new Error(`Invalid CVI project: missing [${sectionName}].`);
+function configSuffix(mode: string): string {
+  const norm = mode.startsWith('custom:') ? mode.slice(7).trim() : mode.trim();
+  switch (norm.toLowerCase()) {
+    case 'debug': return 'Debug';
+    case 'release': return 'Release';
+    case 'debug64': return 'Debug64';
+    case 'release64': return 'Release64';
+    default: return norm;
   }
-  return section;
+}
+
+function getProjectModeSection(document: IniDocument, mode: CviBuildMode | string): IniSection {
+  const norm = typeof mode === 'string' && mode.startsWith('custom:') ? mode.slice(7).trim() : String(mode).trim();
+  if (norm.toLowerCase() === 'debug' || norm.toLowerCase() === 'release' || norm.toLowerCase() === 'debug64' || norm.toLowerCase() === 'release64') {
+    const sectionName = `Default Build Config ${configSuffix(norm)}`;
+    const section = document.getSection(sectionName);
+    if (!section) {
+      throw new Error(`Invalid CVI project: missing [${sectionName}].`);
+    }
+    return section;
+  }
+  for (const s of document.sections) {
+    if (/^Build Config \d{4} /i.test(s.name)) {
+      const configName = unquote(s.get('Config Name')) ?? s.name.replace(/^Build Config \d{4} /i, '').trim();
+      if (configName.toLowerCase() === norm.toLowerCase()) {
+        return s;
+      }
+    }
+  }
+  const fallback = document.getSection('Default Build Config Debug');
+  if (fallback) {
+    return fallback;
+  }
+  throw new Error(`Invalid CVI project: configuration "${mode}" not found.`);
 }
 
 function setBoolean(section: IniSection, key: string, value: boolean): void {
@@ -264,8 +307,8 @@ function setProjectReferencedPath(section: IniSection, key: string, projectPath:
   setPossiblyLongValue(section, key, absolutePath);
 }
 
-function setOutputPath(section: IniSection, mode: CviBuildMode, projectPath: string, value: string): void {
-  const suffix = modeSuffix(mode);
+function setOutputPath(section: IniSection, mode: CviBuildMode | string, projectPath: string, value: string): void {
+  const suffix = configSuffix(mode);
   const key = `Executable File_${suffix}`;
   const trimmed = value.trim();
   if (!trimmed) {
@@ -652,7 +695,7 @@ export class CviParser {
           sectionName: section.name,
           id,
           type: unquote(section.get('File Type')) ?? 'Other',
-          folder: unquote(section.get('Folder')) ?? defaultFolderForType(unquote(section.get('File Type')) ?? 'Other'),
+          folder: (!unquote(section.get('Folder')) || unquote(section.get('Folder')) === 'Not In A Folder') ? '' : unquote(section.get('Folder'))!,
           relativePath: resolved.relativePath,
           absolutePath: resolved.absolutePath,
           excluded: parseBoolean(section.get('Exclude')),
@@ -681,7 +724,7 @@ export class CviParser {
   }
 
 
-  getNativeTargetSettings(projectPath: string, mode: CviBuildMode): CviNativeTargetSettings {
+  getNativeTargetSettings(projectPath: string, mode: CviBuildMode | string): CviNativeTargetSettings {
     const document = IniDocument.parse(readText(projectPath));
     const header = document.getSection('Project Header');
     if (!header) {
@@ -692,7 +735,7 @@ export class CviParser {
     const modules = document.getSection('Modules Forced Into Executable');
     const signing = document.getSection('Signing Info') ?? new IniSection('Signing Info', []);
     const versionValue = (key: string): string => unquote(config.get(`${key} Ex`)) ?? unquote(config.get(key)) ?? '';
-    const outputKey = `Executable File_${modeSuffix(mode)}`;
+    const outputKey = `Executable File_${configSuffix(mode)}`;
     return {
       targetType: unquote(header.get('Target Type')) ?? 'Executable',
       outputPath: resolveStoredPath(createExecutable, outputKey),
@@ -751,7 +794,7 @@ export class CviParser {
     };
   }
 
-  setNativeTargetSettings(projectPath: string, mode: CviBuildMode, settings: CviNativeTargetSettings): void {
+  setNativeTargetSettings(projectPath: string, mode: CviBuildMode | string, settings: CviNativeTargetSettings): void {
     const document = IniDocument.parse(readText(projectPath));
     const header = document.getSection('Project Header');
     if (!header) {
@@ -822,7 +865,7 @@ export class CviParser {
     writeText(projectPath, document.toString());
   }
 
-  getNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode): CviBuildOptions {
+  getNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode | string): CviBuildOptions {
     const document = IniDocument.parse(readText(projectPath));
     const config = getProjectModeSection(document, mode);
 
@@ -848,7 +891,7 @@ export class CviParser {
           }
         }
         const suffix = String(projectIndex).padStart(4, '0');
-        const cwsModeSection = cwsDoc.getSection(`Default Build Config ${suffix} ${modeSuffix(mode)}`);
+        const cwsModeSection = cwsDoc.getSection(`Default Build Config ${suffix} ${configSuffix(mode)}`);
         if (cwsModeSection) {
           debuggingLevel = unquote(cwsModeSection.get('Debugging Level')) ?? debuggingLevel;
           profiling = unquote(cwsModeSection.get('Profile')) ?? profiling;
@@ -857,7 +900,7 @@ export class CviParser {
       } catch { /* ignore cws parsing error */ }
     }
 
-    const is64 = mode.endsWith('64');
+    const is64 = parseBoolean(config.get('Is 64-Bit'), String(mode).endsWith('64'));
     const rawBaseAddr = unquote(config.get(is64 ? 'Image Base Address x64' : 'Image Base Address'))
       ?? unquote(config.get('Image Base Address'))
       ?? '4194304';
@@ -870,6 +913,10 @@ export class CviParser {
 
     const disabledWarningIds = parseWarningIdList(warningListStr).map((n) => Math.abs(n));
     const errorWarningIds = parseWarningIdList(errorListStr).filter((n) => n > 0);
+
+    const concurrentCompiles = Number(config.get('Number of Concurrent Compiles') ?? '0');
+    const rawUninit = unquote(config.get('Uninitialized Locals Compile Warning')) ?? 'Aggressive';
+    const uninitLocals: 'None' | 'Conservative' | 'Aggressive' = rawUninit === 'None' || rawUninit === 'Conservative' ? rawUninit : 'Aggressive';
 
     return {
       callingConvention: unquote(config.get('Default Calling Convention')) ?? 'cdecl',
@@ -888,15 +935,23 @@ export class CviParser {
       compileWithPrecompiledInclude: parseBoolean(config.get('Compile with Precompiled Include File')),
       precompiledIncludeFile: resolveStoredPath(config, 'Precompiled Include File'),
       disabledWarningIds,
-      errorWarningIds
+      errorWarningIds,
+      requirePrototypes: parseBoolean(config.get('Require Prototypes'), true),
+      requireReturnValues: parseBoolean(config.get('Require Return Values'), true),
+      uninitializedLocalsCompile: uninitLocals,
+      enableUnreferencedIdentifiersWarning: parseBoolean(config.get('Enable Unreferenced Identifiers Warning'), true),
+      enablePointerMismatchWarning: parseBoolean(config.get('Enable Pointer Mismatch Warning'), true),
+      enableUnreachableCodeWarning: parseBoolean(config.get('Enable Unreachable Code Warning'), true),
+      enableAssignmentInConditionalWarning: parseBoolean(config.get('Enable Assignment In Conditional Warning'), true),
+      concurrentCompiles
     };
   }
 
-  setNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode, options: CviBuildOptions): void {
+  setNativeBuildOptions(projectPath: string, workspacePath: string | undefined, mode: CviBuildMode | string, options: CviBuildOptions): void {
     const document = IniDocument.parse(readText(projectPath));
     const config = getProjectModeSection(document, mode);
 
-    const is64 = mode.endsWith('64');
+    const is64 = parseBoolean(config.get('Is 64-Bit'), String(mode).endsWith('64'));
     config.set('Default Calling Convention', quote(options.callingConvention));
     config.set('Stack Reserve', String(options.stackReserve));
     config.set('Stack Commit', String(options.stackCommit));
@@ -934,6 +989,17 @@ export class CviParser {
     setBoolean(config, 'Compile with Precompiled Include File', options.compileWithPrecompiledInclude);
     setProjectReferencedPath(config, 'Precompiled Include File', projectPath, options.precompiledIncludeFile);
 
+    setBoolean(config, 'Require Prototypes', options.requirePrototypes);
+    setBoolean(config, 'Require Return Values', options.requireReturnValues);
+    config.set('Uninitialized Locals Compile Warning', quote(options.uninitializedLocalsCompile));
+    setBoolean(config, 'Enable Unreferenced Identifiers Warning', options.enableUnreferencedIdentifiersWarning);
+    setBoolean(config, 'Enable Pointer Mismatch Warning', options.enablePointerMismatchWarning);
+    setBoolean(config, 'Enable Unreachable Code Warning', options.enableUnreachableCodeWarning);
+    setBoolean(config, 'Enable Assignment In Conditional Warning', options.enableAssignmentInConditionalWarning);
+    if (typeof options.concurrentCompiles === 'number') {
+      config.set('Number of Concurrent Compiles', String(options.concurrentCompiles));
+    }
+
     writeText(projectPath, document.toString());
 
     if (workspacePath && fs.existsSync(workspacePath) && path.extname(workspacePath).toLowerCase() === '.cws') {
@@ -955,7 +1021,7 @@ export class CviParser {
           }
         }
         const suffix = String(projectIndex).padStart(4, '0');
-        const sectionName = `Default Build Config ${suffix} ${modeSuffix(mode)}`;
+        const sectionName = `Default Build Config ${suffix} ${configSuffix(mode)}`;
         const cwsModeSection = cwsDoc.ensureSection(sectionName);
         cwsModeSection.set('Debugging Level', quote(options.debuggingLevel));
         cwsModeSection.set('Profile', quote(options.profiling));
@@ -965,21 +1031,194 @@ export class CviParser {
     }
   }
 
-  getTargetPath(projectPath: string, mode: CviBuildMode): string | undefined {
+  getTargetPath(projectPath: string, mode: CviBuildMode | string): string | undefined {
     const document = IniDocument.parse(readText(projectPath));
-    const section = document.getSection('Create Executable');
+    const section = document.getSection('Create Executable') ?? document.getSection('Project Header');
     if (!section) {
       return undefined;
     }
 
-    const suffix = modeSuffix(mode);
+    const suffix = configSuffix(mode);
     const relativePath = unquote(section.get(`Executable File_${suffix} Rel Path`));
     if (relativePath) {
       return path.resolve(path.dirname(projectPath), relativePath);
     }
 
     const absolute = reconstructValue(section, `Executable File_${suffix}`);
-    return absolute ? fromCviPath(absolute) : undefined;
+    if (absolute) {
+      return fromCviPath(absolute);
+    }
+
+    if (suffix !== 'Debug' && suffix !== 'Release' && suffix !== 'Debug64' && suffix !== 'Release64') {
+      const baseSuffix = String(mode).toLowerCase().includes('release')
+        ? (String(mode).endsWith('64') ? 'Release64' : 'Release')
+        : (String(mode).endsWith('64') ? 'Debug64' : 'Debug');
+      const baseAbs = reconstructValue(section, `Executable File_${baseSuffix}`);
+      if (baseAbs) {
+        return fromCviPath(baseAbs);
+      }
+    }
+    return undefined;
+  }
+
+  getCustomConfigurations(projectPath: string, _workspacePath?: string): CviCustomBuildConfig[] {
+    const document = IniDocument.parse(readText(projectPath));
+    const configs: CviCustomBuildConfig[] = [];
+    for (const section of document.sections) {
+      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
+      if (match) {
+        const index = parseInt(match[1], 10);
+        const name = unquote(section.get('Config Name')) ?? match[2].trim();
+        const is64Bit = parseBoolean(section.get('Is 64-Bit'));
+        const isRelease = parseBoolean(section.get('Is Release'));
+        configs.push({
+          index,
+          name,
+          sectionName: section.name,
+          is64Bit,
+          isRelease
+        });
+      }
+    }
+    return configs.sort((a, b) => a.index - b.index);
+  }
+
+  addCustomConfiguration(projectPath: string, name: string, baseConfigName: string, is64Bit?: boolean, isRelease?: boolean): void {
+    const document = IniDocument.parse(readText(projectPath));
+    const cleanName = name.trim();
+    if (!cleanName) {
+      throw new Error('Configuration name cannot be empty.');
+    }
+    const existing = this.getCustomConfigurations(projectPath);
+    if (existing.some((c) => c.name.toLowerCase() === cleanName.toLowerCase()) || ['debug', 'release', 'debug64', 'release64'].includes(cleanName.toLowerCase())) {
+      throw new Error(`A configuration named "${cleanName}" already exists.`);
+    }
+
+    const baseSection = getProjectModeSection(document, baseConfigName);
+    let customHeaders = document.getSection('Custom Build Configs');
+    if (!customHeaders) {
+      customHeaders = new IniSection('Custom Build Configs', []);
+      document.sections.push(customHeaders);
+    }
+    const nextIndex = existing.length + 1;
+    const suffix = String(nextIndex).padStart(4, '0');
+    const newSectionName = `Build Config ${suffix} ${cleanName}`;
+    const newSection = new IniSection(newSectionName, []);
+
+    for (const entry of baseSection.entries()) {
+      newSection.set(entry.key, entry.value);
+    }
+    newSection.set('Config Name', quote(cleanName));
+    if (is64Bit !== undefined) {
+      setBoolean(newSection, 'Is 64-Bit', is64Bit);
+    } else if (!newSection.has('Is 64-Bit')) {
+      setBoolean(newSection, 'Is 64-Bit', baseConfigName.endsWith('64'));
+    }
+    if (isRelease !== undefined) {
+      setBoolean(newSection, 'Is Release', isRelease);
+    } else if (!newSection.has('Is Release')) {
+      setBoolean(newSection, 'Is Release', baseConfigName.toLowerCase().includes('release'));
+    }
+
+    customHeaders.set('Num Custom Build Configs', String(nextIndex));
+    document.sections.push(newSection);
+
+    const header = document.getSection('Project Header');
+    if (header) {
+      const baseOutputKey = `Executable File_${configSuffix(baseConfigName)}`;
+      const baseOutVal = header.get(baseOutputKey);
+      if (baseOutVal) {
+        header.set(`Executable File_${cleanName}`, baseOutVal);
+      }
+    }
+
+    writeText(projectPath, document.toString());
+  }
+
+  duplicateConfiguration(projectPath: string, sourceName: string, targetName: string): void {
+    this.addCustomConfiguration(projectPath, targetName, sourceName);
+  }
+
+  renameCustomConfiguration(projectPath: string, oldName: string, newName: string): void {
+    const document = IniDocument.parse(readText(projectPath));
+    const cleanNew = newName.trim();
+    if (!cleanNew) {
+      throw new Error('Configuration name cannot be empty.');
+    }
+    const existing = this.getCustomConfigurations(projectPath);
+    if (existing.some((c) => c.name.toLowerCase() === cleanNew.toLowerCase()) || ['debug', 'release', 'debug64', 'release64'].includes(cleanNew.toLowerCase())) {
+      throw new Error(`A configuration named "${cleanNew}" already exists.`);
+    }
+
+    let found = false;
+    for (const section of document.sections) {
+      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
+      if (match) {
+        const curName = unquote(section.get('Config Name')) ?? match[2].trim();
+        if (curName.toLowerCase() === oldName.trim().toLowerCase()) {
+          section.name = `Build Config ${match[1]} ${cleanNew}`;
+          section.set('Config Name', quote(cleanNew));
+          found = true;
+          break;
+        }
+      }
+    }
+    if (!found) {
+      throw new Error(`Custom configuration "${oldName}" was not found.`);
+    }
+
+    const header = document.getSection('Project Header');
+    if (header) {
+      const oldKey = `Executable File_${oldName.trim()}`;
+      const val = header.get(oldKey);
+      if (val) {
+        header.delete(oldKey);
+        header.set(`Executable File_${cleanNew}`, val);
+      }
+    }
+
+    writeText(projectPath, document.toString());
+  }
+
+  removeCustomConfiguration(projectPath: string, configName: string): void {
+    const document = IniDocument.parse(readText(projectPath));
+    const target = configName.trim().toLowerCase();
+    const remainingSections: IniSection[] = [];
+    const customSections: IniSection[] = [];
+
+    for (const section of document.sections) {
+      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
+      if (match) {
+        const curName = unquote(section.get('Config Name')) ?? match[2].trim();
+        if (curName.toLowerCase() === target) {
+          continue;
+        }
+        customSections.push(section);
+      } else {
+        remainingSections.push(section);
+      }
+    }
+
+    customSections.forEach((section, idx) => {
+      const nextIndex = idx + 1;
+      const suffix = String(nextIndex).padStart(4, '0');
+      const curName = unquote(section.get('Config Name')) ?? 'Config';
+      section.name = `Build Config ${suffix} ${curName}`;
+    });
+
+    const customHeaders = document.getSection('Custom Build Configs');
+    if (customHeaders) {
+      customHeaders.set('Num Custom Build Configs', String(customSections.length));
+    }
+
+    const header = document.getSection('Project Header');
+    if (header) {
+      header.delete(`Executable File_${configName.trim()}`);
+    }
+
+    document.sections.length = 0;
+    document.sections.push(...remainingSections, ...customSections);
+    writeText(projectPath, document.toString());
   }
 
 
@@ -1326,7 +1565,7 @@ export class CviParser {
       }
 
       const fileType = fileTypeForPath(filePath);
-      const folder = folderOverride?.trim() || defaultFolderForType(fileType);
+      const folder = folderOverride !== undefined ? folderOverride.trim() : '';
       const relativePath = normalizeRelativePath(projectDirectory, filePath);
       const sectionName = `File ${String(nextId).padStart(4, '0')}`;
       const section = new IniSection(sectionName, []);
@@ -1341,10 +1580,12 @@ export class CviParser {
         section.set('Compile Into Object File', 'False');
       }
       section.set('Project Flags', '0');
-      section.set('Folder', quote(folder));
+      section.set('Folder', quote(folder ? folder : 'Not In A Folder'));
       section.lines.push('');
       document.addSection(section, 'Folders');
-      this.ensureProjectFolder(document, folder);
+      if (folder) {
+        this.ensureProjectFolder(document, folder);
+      }
       existingFiles.push(normalized);
       nextId += 1;
       added += 1;
@@ -1560,11 +1801,12 @@ export class CviParser {
       if (!sectionNameSet.has(section.name)) {
         continue;
       }
-      const currentFolder = normalizeLogicalFolder(unquote(section.get('Folder')) ?? '');
+      const rawCurrent = unquote(section.get('Folder'));
+      const currentFolder = (!rawCurrent || rawCurrent === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawCurrent);
       if (currentFolder.toLowerCase() === normalizedFolder.toLowerCase()) {
         continue;
       }
-      section.set('Folder', quote(normalizedFolder));
+      section.set('Folder', quote(normalizedFolder ? normalizedFolder : 'Not In A Folder'));
       moved += 1;
     }
 
@@ -1575,6 +1817,195 @@ export class CviParser {
       writeText(projectPath, document.toString());
     }
     return moved;
+  }
+
+  moveFileBefore(projectPath: string, sectionName: string, targetSectionName?: string, targetFolder?: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const sectionIndex = fileSections.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (sectionIndex < 0) {
+      return false;
+    }
+    const section = fileSections[sectionIndex];
+    if (targetFolder !== undefined) {
+      const normalizedTarget = normalizeLogicalFolder(targetFolder);
+      section.set('Folder', quote(normalizedTarget ? normalizedTarget : 'Not In A Folder'));
+      if (normalizedTarget) {
+        this.ensureProjectFolder(document, normalizedTarget);
+      }
+    }
+    fileSections.splice(sectionIndex, 1);
+    const targetIndex = targetSectionName
+      ? fileSections.findIndex((s) => s.name.toLowerCase() === targetSectionName.toLowerCase())
+      : -1;
+    if (targetIndex >= 0) {
+      fileSections.splice(targetIndex, 0, section);
+    } else {
+      fileSections.push(section);
+    }
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFileUp(projectPath: string, sectionName: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const target = fileSections.find((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (!target) {
+      return false;
+    }
+    const rawTargetFolder = unquote(target.get('Folder'));
+    const targetFolder = (!rawTargetFolder || rawTargetFolder === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawTargetFolder);
+    const siblings = fileSections.filter((s) => {
+      const raw = unquote(s.get('Folder'));
+      const f = (!raw || raw === 'Not In A Folder') ? '' : normalizeLogicalFolder(raw);
+      return f.toLowerCase() === targetFolder.toLowerCase();
+    });
+    const siblingIndex = siblings.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (siblingIndex <= 0) {
+      return false;
+    }
+    const prevSibling = siblings[siblingIndex - 1];
+    const prevGlobalIndex = fileSections.indexOf(prevSibling);
+    const targetGlobalIndex = fileSections.indexOf(target);
+    fileSections.splice(targetGlobalIndex, 1);
+    fileSections.splice(prevGlobalIndex, 0, target);
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFileDown(projectPath: string, sectionName: string): boolean {
+    const document = IniDocument.parse(readText(projectPath));
+    const fileSections = document.sections.filter((s) => /^File \d{4}$/i.test(s.name));
+    const target = fileSections.find((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (!target) {
+      return false;
+    }
+    const rawTargetFolder = unquote(target.get('Folder'));
+    const targetFolder = (!rawTargetFolder || rawTargetFolder === 'Not In A Folder') ? '' : normalizeLogicalFolder(rawTargetFolder);
+    const siblings = fileSections.filter((s) => {
+      const raw = unquote(s.get('Folder'));
+      const f = (!raw || raw === 'Not In A Folder') ? '' : normalizeLogicalFolder(raw);
+      return f.toLowerCase() === targetFolder.toLowerCase();
+    });
+    const siblingIndex = siblings.findIndex((s) => s.name.toLowerCase() === sectionName.toLowerCase());
+    if (siblingIndex < 0 || siblingIndex >= siblings.length - 1) {
+      return false;
+    }
+    const nextSibling = siblings[siblingIndex + 1];
+    const nextGlobalIndex = fileSections.indexOf(nextSibling);
+    const targetGlobalIndex = fileSections.indexOf(target);
+    fileSections.splice(targetGlobalIndex, 1);
+    fileSections.splice(nextGlobalIndex, 0, target);
+    this.resequenceFileSections(document, fileSections);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderBefore(projectPath: string, folder: string, targetFolder?: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    const normalizedTarget = targetFolder ? normalizeLogicalFolder(targetFolder) : undefined;
+    if (!normalized || normalized.toLowerCase() === normalizedTarget?.toLowerCase()) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx >= 0) {
+      existing.splice(idx, 1);
+    }
+    const targetIdx = normalizedTarget ? existing.findIndex((f) => f.toLowerCase() === normalizedTarget.toLowerCase()) : -1;
+    if (targetIdx >= 0) {
+      existing.splice(targetIdx, 0, normalized);
+    } else {
+      existing.push(normalized);
+    }
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderUp(projectPath: string, folder: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    if (!normalized) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx <= 0) {
+      return false;
+    }
+    const temp = existing[idx - 1];
+    existing[idx - 1] = existing[idx];
+    existing[idx] = temp;
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  moveFolderDown(projectPath: string, folder: string): boolean {
+    const normalized = normalizeLogicalFolder(folder);
+    if (!normalized) {
+      return false;
+    }
+    const document = IniDocument.parse(readText(projectPath));
+    const foldersSection = document.ensureSection('Folders', 'Custom Build Configs');
+    const existing = foldersSection.entries()
+      .filter(({ key }) => /^Folder \d+$/i.test(key))
+      .map(({ value }) => normalizeLogicalFolder(unquote(value) ?? ''))
+      .filter(Boolean);
+    const idx = existing.findIndex((f) => f.toLowerCase() === normalized.toLowerCase());
+    if (idx < 0 || idx >= existing.length - 1) {
+      return false;
+    }
+    const temp = existing[idx + 1];
+    existing[idx + 1] = existing[idx];
+    existing[idx] = temp;
+    this.rewriteFoldersSection(foldersSection, existing);
+    writeText(projectPath, document.toString());
+    return true;
+  }
+
+  private rewriteFoldersSection(foldersSection: IniSection, folders: string[]): void {
+    const preserved = foldersSection.entries().filter(({ key }) => !/^Folder \d+$/i.test(key));
+    foldersSection.deleteMatching(/^Folder \d+$/i);
+    preserved.forEach(({ key, value }) => foldersSection.set(key, value));
+    folders.forEach((folder, index) => foldersSection.set(`Folder ${index}`, quote(folder)));
+  }
+
+  private resequenceFileSections(document: IniDocument, fileSections: IniSection[]): void {
+    const firstIndex = document.sections.findIndex((s) => /^File \d{4}$/i.test(s.name));
+    document.sections.splice(0, document.sections.length, ...document.sections.filter((s) => !/^File \d{4}$/i.test(s.name)));
+    fileSections.forEach((section, index) => {
+      const newName = `File ${String(index + 1).padStart(4, '0')}`;
+      section.name = newName;
+      section.set('Res Id', String(index + 1));
+    });
+    if (firstIndex >= 0) {
+      document.sections.splice(firstIndex, 0, ...fileSections);
+    } else {
+      const foldersIndex = document.sections.findIndex((s) => s.name.toLowerCase() === 'folders');
+      if (foldersIndex >= 0) {
+        document.sections.splice(foldersIndex, 0, ...fileSections);
+      } else {
+        document.sections.push(...fileSections);
+      }
+    }
+    const header = document.getSection('Project Header');
+    if (header) {
+      header.set('Number of Files', String(fileSections.length));
+    }
   }
 
   createWorkspaceAndProject(rootDirectory: string, workspaceName: string, projectName: string, targetType: string, cviDir: string | undefined, formatVersion: number): { workspacePath: string; projectPath: string } {

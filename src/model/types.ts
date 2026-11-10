@@ -52,3 +52,10 @@ export interface CviInstallation {
   clangCcExe?: string;
   source: 'configured' | 'workspace' | 'scan' | 'manual';
 }
+
+export interface CviRecentItem {
+  path: string;
+  name: string;
+  type: 'workspace' | 'project';
+  lastOpened: number;
+}

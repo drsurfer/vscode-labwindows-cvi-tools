@@ -2,12 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CviParser, defaultFolderForType } from '../model/cviParser';
-import { CviProject, CviProjectFile, CviWorkspace, CviWorkspaceProjectRef } from '../model/types';
+import { CviProject, CviProjectFile, CviRecentItem, CviWorkspace, CviWorkspaceProjectRef } from '../model/types';
 import { CviInstallationService } from './cviInstallationService';
 import { CviTemplateService } from './cviTemplateService';
 import { getConfiguredCviEncoding, readCviTextFile, writeCviTextFile } from '../utils/pathUtils';
 
 const LAST_WORKSPACE_KEY = 'labwindowsCvi.lastWorkspace';
+const RECENT_ITEMS_KEY = 'labwindowsCvi.recentItems';
 
 export class CviWorkspaceService implements vscode.Disposable {
   private workspace: CviWorkspace | undefined;
@@ -111,7 +112,7 @@ export class CviWorkspaceService implements vscode.Disposable {
       filters: { 'LabWindows/CVI workspace or project': ['cws', 'prj'] }
     });
     if (files?.[0]) {
-      await this.load(files[0].fsPath);
+      await this.openProjectOrWorkspace(files[0].fsPath);
     }
   }
 
@@ -122,6 +123,7 @@ export class CviWorkspaceService implements vscode.Disposable {
     }
     this.workspace = extension === '.cws' ? this.parser.parseWorkspace(filePath) : this.parser.parseStandaloneProject(filePath);
     await this.context.workspaceState.update(LAST_WORKSPACE_KEY, filePath);
+    await this.addRecentItem(filePath);
     await this.syncEditorEncoding();
     this.output.appendLine(`[CVI] Loaded ${extension === '.cws' ? 'workspace' : 'project'}: ${filePath}`);
     this.changeEmitter.fire();
@@ -232,6 +234,267 @@ export class CviWorkspaceService implements vscode.Disposable {
     const result = this.parser.createWorkspaceAndProject(folder[0].fsPath, workspaceName, projectName, target.value, installation?.root, formatVersion);
     await this.load(result.workspacePath);
     vscode.window.showInformationMessage(`Created ${path.basename(result.workspacePath)} and ${path.basename(result.projectPath)}.`);
+  }
+
+  getRecentItems(): CviRecentItem[] {
+    const raw = this.context.globalState.get<CviRecentItem[]>(RECENT_ITEMS_KEY, []);
+    return raw.filter((item) => typeof item?.path === 'string' && fs.existsSync(item.path));
+  }
+
+  async addRecentItem(filePath: string): Promise<void> {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext !== '.cws' && ext !== '.prj') {
+      return;
+    }
+    const normalized = path.normalize(filePath).toLowerCase();
+    const current = this.getRecentItems().filter((item) => path.normalize(item.path).toLowerCase() !== normalized);
+    const item: CviRecentItem = {
+      path: filePath,
+      name: path.basename(filePath, ext),
+      type: ext === '.cws' ? 'workspace' : 'project',
+      lastOpened: Date.now()
+    };
+    current.unshift(item);
+    const trimmed = current.slice(0, 20);
+    await this.context.globalState.update(RECENT_ITEMS_KEY, trimmed);
+    this.changeEmitter.fire();
+  }
+
+  async removeRecentItem(filePath: string): Promise<void> {
+    const normalized = path.normalize(filePath).toLowerCase();
+    const filtered = this.getRecentItems().filter((item) => path.normalize(item.path).toLowerCase() !== normalized);
+    await this.context.globalState.update(RECENT_ITEMS_KEY, filtered);
+    this.changeEmitter.fire();
+  }
+
+  async clearRecentItems(): Promise<void> {
+    await this.context.globalState.update(RECENT_ITEMS_KEY, []);
+    this.changeEmitter.fire();
+  }
+
+  findAssociatedWorkspaces(projectPath: string): string[] {
+    const candidates = new Set<string>();
+    const projectDir = path.dirname(projectPath);
+    const parentDir = path.dirname(projectDir);
+    const projectFileName = path.basename(projectPath);
+    const projectBaseName = path.basename(projectPath, path.extname(projectPath));
+
+    const checkDir = (dir: string) => {
+      if (!fs.existsSync(dir)) {
+        return;
+      }
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile() && entry.name.toLowerCase().endsWith('.cws')) {
+            const cwsPath = path.join(dir, entry.name);
+            const cwsBase = path.basename(entry.name, path.extname(entry.name));
+            if (cwsBase.toLowerCase() === projectBaseName.toLowerCase()) {
+              candidates.add(cwsPath);
+              continue;
+            }
+            try {
+              const text = readCviTextFile(cwsPath);
+              if (text.toLowerCase().includes(projectFileName.toLowerCase())) {
+                candidates.add(cwsPath);
+              }
+            } catch {
+              // ignore unreadable
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    checkDir(projectDir);
+    if (parentDir && parentDir !== projectDir) {
+      checkDir(parentDir);
+    }
+
+    return Array.from(candidates);
+  }
+
+  async openProjectOrWorkspace(filePath: string): Promise<void> {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.cws') {
+      await this.load(filePath);
+      return;
+    }
+    if (ext === '.prj') {
+      const candidates = this.findAssociatedWorkspaces(filePath);
+      const behavior = vscode.workspace.getConfiguration('labwindowsCvi').get<string>('openProjectWorkspaceBehavior', 'prompt');
+
+      if (candidates.length > 0 && behavior === 'openWorkspace') {
+        const prjBase = path.basename(filePath, ext).toLowerCase();
+        const best = candidates.find((c) => path.basename(c, '.cws').toLowerCase() === prjBase) ?? candidates[0];
+        await this.load(best);
+        return;
+      }
+
+      if (candidates.length > 0 && behavior === 'prompt') {
+        interface WorkspacePickItem extends vscode.QuickPickItem {
+          action: 'workspace' | 'standalone';
+          targetPath: string;
+        }
+        const items: WorkspacePickItem[] = candidates.map((candidate) => ({
+          label: `$(folder) Open associated workspace '${path.basename(candidate)}'`,
+          description: candidate,
+          action: 'workspace',
+          targetPath: candidate
+        }));
+        items.push({
+          label: `$(file-code) Open project standalone '${path.basename(filePath)}'`,
+          description: 'Open in standalone temporary workspace context',
+          action: 'standalone',
+          targetPath: filePath
+        });
+
+        const picked = await vscode.window.showQuickPick(items, {
+          title: `Associated Workspace Detected for ${path.basename(filePath)}`,
+          placeHolder: 'Select how you want to open this LabWindows/CVI project'
+        });
+
+        if (!picked) {
+          return;
+        }
+
+        await this.load(picked.targetPath);
+        return;
+      }
+
+      await this.load(filePath);
+      return;
+    }
+
+    throw new Error('Select a .cws workspace or a .prj project.');
+  }
+
+  async promptOpenRecent(): Promise<void> {
+    const recents = this.getRecentItems();
+    if (recents.length === 0) {
+      vscode.window.showInformationMessage('No recent LabWindows/CVI workspaces or projects found.');
+      return;
+    }
+
+    interface RecentPickItem extends vscode.QuickPickItem {
+      filePath?: string;
+      isClear?: boolean;
+    }
+
+    const items: RecentPickItem[] = recents.map((item) => ({
+      label: item.type === 'workspace' ? `$(folder) ${item.name}.cws` : `$(file-code) ${item.name}.prj`,
+      description: item.type === 'workspace' ? 'Workspace' : 'Project',
+      detail: item.path,
+      filePath: item.path,
+      buttons: [
+        {
+          iconPath: new vscode.ThemeIcon('close'),
+          tooltip: 'Remove from recent list'
+        }
+      ]
+    }));
+
+    items.push({
+      label: '',
+      kind: vscode.QuickPickItemKind.Separator
+    });
+    items.push({
+      label: '$(trash) Clear Recent Workspaces & Projects',
+      description: 'Remove all recent history',
+      isClear: true
+    });
+
+    const quickPick = vscode.window.createQuickPick<RecentPickItem>();
+    quickPick.title = 'LabWindows/CVI: Recent Workspaces and Projects';
+    quickPick.placeholder = 'Select a workspace or project to open';
+    quickPick.items = items;
+
+    quickPick.onDidTriggerItemButton(async (e) => {
+      if (e.item.filePath) {
+        await this.removeRecentItem(e.item.filePath);
+        quickPick.items = quickPick.items.filter((i) => i.filePath !== e.item.filePath);
+      }
+    });
+
+    quickPick.onDidAccept(async () => {
+      const selected = quickPick.selectedItems[0];
+      quickPick.hide();
+      if (!selected) {
+        return;
+      }
+      if (selected.isClear) {
+        await this.clearRecentItems();
+        return;
+      }
+      if (selected.filePath) {
+        await this.openProjectOrWorkspace(selected.filePath);
+      }
+    });
+
+    quickPick.onDidHide(() => quickPick.dispose());
+    quickPick.show();
+  }
+
+  async moveFileBefore(projectRef: CviWorkspaceProjectRef, sectionName: string, targetSectionName?: string, targetFolder?: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFileBefore(projectRef.absolutePath, sectionName, targetSectionName, targetFolder);
+    if (moved) {
+      this.refresh();
+    }
+  }
+
+  async moveFileUp(projectRef: CviWorkspaceProjectRef, sectionName: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFileUp(projectRef.absolutePath, sectionName);
+    if (moved) {
+      this.refresh();
+    }
+  }
+
+  async moveFileDown(projectRef: CviWorkspaceProjectRef, sectionName: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFileDown(projectRef.absolutePath, sectionName);
+    if (moved) {
+      this.refresh();
+    }
+  }
+
+  async moveFolderBefore(projectRef: CviWorkspaceProjectRef, folder: string, targetFolder?: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFolderBefore(projectRef.absolutePath, folder, targetFolder);
+    if (moved) {
+      this.refresh();
+    }
+  }
+
+  async moveFolderUp(projectRef: CviWorkspaceProjectRef, folder: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFolderUp(projectRef.absolutePath, folder);
+    if (moved) {
+      this.refresh();
+    }
+  }
+
+  async moveFolderDown(projectRef: CviWorkspaceProjectRef, folder: string): Promise<void> {
+    if (!projectRef.exists) {
+      return;
+    }
+    const moved = this.parser.moveFolderDown(projectRef.absolutePath, folder);
+    if (moved) {
+      this.refresh();
+    }
   }
 
   async setActiveProject(projectRef?: CviWorkspaceProjectRef): Promise<void> {
@@ -380,7 +643,7 @@ export class CviWorkspaceService implements vscode.Disposable {
       }
     }
 
-    const count = this.parser.addFilesToProject(ref.absolutePath, files.map((file) => file.fsPath), folder || undefined);
+    const count = this.parser.addFilesToProject(ref.absolutePath, files.map((file) => file.fsPath), folder !== undefined ? folder.trim() : undefined);
     this.refresh();
     vscode.window.showInformationMessage(`${count} file(s) added to ${ref.name}.`);
   }

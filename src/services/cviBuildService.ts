@@ -65,6 +65,18 @@ export class CviBuildService {
   ) {}
 
   private currentReport: CviBuildReport | undefined;
+  private _isBuilding = false;
+  private _buildingProject: string | undefined = undefined;
+  private readonly _onDidChangeBuilding = new vscode.EventEmitter<{ isBuilding: boolean; projectPath?: string; label?: string }>();
+  public readonly onDidChangeBuilding = this._onDidChangeBuilding.event;
+
+  public get isBuilding(): boolean {
+    return this._isBuilding;
+  }
+
+  public get buildingProjectPath(): string | undefined {
+    return this._buildingProject;
+  }
 
   get buildMode(): CviBuildMode {
     return vscode.workspace.getConfiguration('labwindowsCvi').get<CviBuildMode>('buildMode', 'debug');
@@ -110,17 +122,97 @@ export class CviBuildService {
   }
 
   async selectBuildMode(): Promise<void> {
-    const selected = await vscode.window.showQuickPick([
-      { label: 'Debug x86', value: 'debug' as CviBuildMode, description: 'compile.exe -debug' },
-      { label: 'Release x86', value: 'release' as CviBuildMode, description: 'compile.exe -release' },
-      { label: 'Debug x64', value: 'debug64' as CviBuildMode, description: 'compile.exe -debug64' },
-      { label: 'Release x64', value: 'release64' as CviBuildMode, description: 'compile.exe -release64' }
-    ], { title: 'Select the LabWindows/CVI build mode' });
+    const activeRef = this.workspaces.activeProjectRef;
+    const customConfigs = activeRef?.exists ? this.parser.getCustomConfigurations(activeRef.absolutePath) : [];
+    const currentCustom = vscode.workspace.getConfiguration('labwindowsCvi').get<string>('customBuildConfiguration', '').trim();
+    const currentMode = this.buildMode;
+
+    interface BuildModePickItem extends vscode.QuickPickItem {
+      value: CviBuildMode;
+      customConfigName?: string;
+      isManageAction?: boolean;
+    }
+
+    const items: BuildModePickItem[] = [
+      {
+        label: `$(gear) Debug x86`,
+        description: 'compile.exe -debug',
+        detail: !currentCustom && currentMode === 'debug' ? '✓ Currently active' : undefined,
+        value: 'debug'
+      },
+      {
+        label: `$(rocket) Release x86`,
+        description: 'compile.exe -release',
+        detail: !currentCustom && currentMode === 'release' ? '✓ Currently active' : undefined,
+        value: 'release'
+      },
+      {
+        label: `$(gear) Debug x64`,
+        description: 'compile.exe -debug64',
+        detail: !currentCustom && currentMode === 'debug64' ? '✓ Currently active' : undefined,
+        value: 'debug64'
+      },
+      {
+        label: `$(rocket) Release x64`,
+        description: 'compile.exe -release64',
+        detail: !currentCustom && currentMode === 'release64' ? '✓ Currently active' : undefined,
+        value: 'release64'
+      }
+    ];
+
+    if (customConfigs.length > 0) {
+      items.push({
+        label: 'Custom Build Configurations',
+        kind: vscode.QuickPickItemKind.Separator,
+        value: 'debug'
+      } as any);
+
+      for (const c of customConfigs) {
+        const baseMode: CviBuildMode = c.is64Bit ? (c.isRelease ? 'release64' : 'debug64') : (c.isRelease ? 'release' : 'debug');
+        const isActive = currentCustom.toLowerCase() === c.name.toLowerCase();
+        items.push({
+          label: `$(layers) ${c.name}`,
+          description: `${c.is64Bit ? 'x64' : 'x86'} ${c.isRelease ? 'Release' : 'Debug'} (-config="${c.name}")`,
+          detail: isActive ? '✓ Currently active' : undefined,
+          value: baseMode,
+          customConfigName: c.name
+        });
+      }
+    }
+
+    items.push({
+      label: 'Management',
+      kind: vscode.QuickPickItemKind.Separator,
+      value: 'debug'
+    } as any);
+
+    items.push({
+      label: '$(tools) Manage Configurations...',
+      description: 'Add, duplicate, rename, or delete build configurations',
+      value: 'debug',
+      isManageAction: true
+    });
+
+    const selected = await vscode.window.showQuickPick(items, { title: 'Select LabWindows/CVI Build Configuration' });
     if (!selected) {
       return;
     }
-    await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', selected.value, vscode.ConfigurationTarget.Workspace);
-    vscode.window.showInformationMessage(`LabWindows/CVI build mode: ${selected.label}.`);
+
+    if (selected.isManageAction) {
+      void vscode.commands.executeCommand('labwindowsCvi.manageConfigurations');
+      return;
+    }
+
+    const config = vscode.workspace.getConfiguration('labwindowsCvi');
+    if (selected.customConfigName) {
+      await config.update('buildMode', selected.value, vscode.ConfigurationTarget.Workspace);
+      await config.update('customBuildConfiguration', selected.customConfigName, vscode.ConfigurationTarget.Workspace);
+      vscode.window.showInformationMessage(`Active configuration: ${selected.customConfigName} (${selected.value}).`);
+    } else {
+      await config.update('buildMode', selected.value, vscode.ConfigurationTarget.Workspace);
+      await config.update('customBuildConfiguration', '', vscode.ConfigurationTarget.Workspace);
+      vscode.window.showInformationMessage(`Active configuration: ${selected.label}.`);
+    }
   }
 
   async build(rebuild = false, projectRef?: CviWorkspaceProjectRef): Promise<boolean> {
@@ -129,11 +221,46 @@ export class CviBuildService {
       vscode.window.showErrorMessage('No existing active CVI project is available for build.');
       return false;
     }
+    if (this._isBuilding) {
+      vscode.window.showWarningMessage('A LabWindows/CVI build is already in progress.');
+      return false;
+    }
     const installation = await this.requireCompiler();
     if (!installation?.compileExe) {
       return false;
     }
 
+    const title = `${rebuild ? 'Rebuilding' : 'Building'} ${ref.name}`;
+    this._isBuilding = true;
+    this._buildingProject = ref.absolutePath;
+    this._onDidChangeBuilding.fire({ isBuilding: true, projectPath: ref.absolutePath, label: title });
+    void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', true);
+
+    try {
+      return await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `LabWindows/CVI: ${title}...`,
+          cancellable: false
+        },
+        async (progress) => {
+          return await this.executeBuild(rebuild, ref, installation, progress);
+        }
+      );
+    } finally {
+      this._isBuilding = false;
+      this._buildingProject = undefined;
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', false);
+      this._onDidChangeBuilding.fire({ isBuilding: false });
+    }
+  }
+
+  private async executeBuild(
+    rebuild: boolean,
+    ref: CviWorkspaceProjectRef,
+    installation: CviInstallation,
+    progress?: vscode.Progress<{ message?: string; increment?: number }>
+  ): Promise<boolean> {
     const report = this.beginOutput(`${rebuild ? 'Rebuild' : 'Build'} ${ref.name}`);
     let success = false;
     let failedAt = '';
@@ -172,7 +299,9 @@ export class CviBuildService {
         }
       }
 
-      for (const item of order) {
+      for (let i = 0; i < order.length; i++) {
+        const item = order[i];
+        progress?.report({ message: `Compiling ${item.name} (${i + 1}/${order.length})...` });
         const cwd = path.dirname(item.absolutePath);
         const settings = this.projectSettings.getSettings(item);
         const project = this.workspaces.getProject(item);
@@ -206,7 +335,7 @@ export class CviBuildService {
         }
 
         const args: string[] = [item.absolutePath, ...this.commonCompilerArguments(rebuild)];
-        const result = await this.runCviCompile(installation.compileExe, args, cwd, `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`);
+        const result = await this.runCviCompile(installation.compileExe!, args, cwd, `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`);
         if (!result.success) {
           failedAt = this.currentReport?.failedAt ?? `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`;
           return false;
@@ -241,56 +370,85 @@ export class CviBuildService {
       vscode.window.showErrorMessage('No existing active CVI project is available to clean.');
       return;
     }
-    const report = this.beginOutput(`Clean ${ref.name}`);
-    let success = true;
+    if (this._isBuilding) {
+      vscode.window.showWarningMessage('A LabWindows/CVI build is already in progress.');
+      return;
+    }
+    this._isBuilding = true;
+    this._buildingProject = ref.absolutePath;
+    this._onDidChangeBuilding.fire({ isBuilding: true, projectPath: ref.absolutePath, label: `Cleaning ${ref.name}` });
+    void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', true);
+
     try {
-      const project = this.workspaces.getProject(ref);
-      const target = this.parser.getTargetPath(ref.absolutePath, this.buildMode);
-      const candidates = new Set<string>();
-      if (target) {
-        candidates.add(target);
-        candidates.add(replaceExtension(target, '.cdb'));
-        candidates.add(replaceExtension(target, '.pdb'));
-        if (project?.targetType === 'Dynamic Link Library') {
-          candidates.add(replaceExtension(target, '.lib'));
-        }
-      }
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `LabWindows/CVI: Cleaning ${ref.name}...`,
+          cancellable: false
+        },
+        async () => {
+          const report = this.beginOutput(`Clean ${ref.name}`);
+          let success = true;
+          try {
+            const project = this.workspaces.getProject(ref);
+            const target = this.parser.getTargetPath(ref.absolutePath, this.buildMode);
+            const candidates = new Set<string>();
+            if (target) {
+              candidates.add(target);
+              candidates.add(replaceExtension(target, '.cdb'));
+              candidates.add(replaceExtension(target, '.pdb'));
+              if (project?.targetType === 'Dynamic Link Library') {
+                candidates.add(replaceExtension(target, '.lib'));
+              }
+            }
 
-      this.appendSection('CLEAN GENERATED TARGET');
-      this.output.appendLine(`  Project   : ${ref.name}`);
-      this.output.appendLine(`  Target    : ${target ? normalizeRuntimePath(target) : '<not resolved from .prj>'}`);
-      this.output.appendLine(`  Type      : ${project?.targetType ?? '<unknown>'}`);
-      this.output.appendLine('');
+            this.appendSection('CLEAN GENERATED TARGET');
+            this.output.appendLine(`  Project   : ${ref.name}`);
+            this.output.appendLine(`  Target    : ${target ? normalizeRuntimePath(target) : '<not resolved from .prj>'}`);
+            this.output.appendLine(`  Type      : ${project?.targetType ?? '<unknown>'}`);
+            this.output.appendLine('');
 
-      let removed = 0;
-      for (const candidate of candidates) {
-        if (!fs.existsSync(candidate)) {
-          continue;
+            let removed = 0;
+            for (const candidate of candidates) {
+              if (!fs.existsSync(candidate)) {
+                continue;
+              }
+              try {
+                fs.rmSync(candidate, { force: true });
+                this.output.appendLine(`  [OK] Deleted: ${candidate}`);
+                removed += 1;
+              } catch (error) {
+                success = false;
+                const message = error instanceof Error ? error.message : String(error);
+                this.output.appendLine(`  [X] Unable to delete ${candidate}: ${message}`);
+                this.recordSyntheticFailure(`Clean ${ref.name}`, `Unable to delete ${candidate}: ${message}`);
+              }
+            }
+            if (removed === 0) {
+              this.output.appendLine('  No generated target file was found. Source files and referenced libraries were not modified.');
+            }
+            vscode.window.showInformationMessage(`Clean completed for ${ref.name}: ${removed} generated file(s) removed.`);
+          } finally {
+            this.finishOutput(report, success, success ? '' : `Clean ${ref.name}`);
+          }
         }
-        try {
-          fs.rmSync(candidate, { force: true });
-          this.output.appendLine(`  [OK] Deleted: ${candidate}`);
-          removed += 1;
-        } catch (error) {
-          success = false;
-          const message = error instanceof Error ? error.message : String(error);
-          this.output.appendLine(`  [X] Unable to delete ${candidate}: ${message}`);
-          this.recordSyntheticFailure(`Clean ${ref.name}`, `Unable to delete ${candidate}: ${message}`);
-        }
-      }
-      if (removed === 0) {
-        this.output.appendLine('  No generated target file was found. Source files and referenced libraries were not modified.');
-      }
-      vscode.window.showInformationMessage(`Clean completed for ${ref.name}: ${removed} generated file(s) removed.`);
+      );
     } finally {
-      this.finishOutput(report, success, success ? '' : `Clean ${ref.name}`);
+      this._isBuilding = false;
+      this._buildingProject = undefined;
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', false);
+      this._onDidChangeBuilding.fire({ isBuilding: false });
     }
   }
 
-async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
+  async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     const ref = projectRef ?? this.workspaces.activeProjectRef;
     if (!ref?.exists) {
       vscode.window.showErrorMessage('No existing active CVI project is available for batch build.');
+      return;
+    }
+    if (this._isBuilding) {
+      vscode.window.showWarningMessage('A LabWindows/CVI build is already in progress.');
       return;
     }
 
@@ -363,36 +521,56 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     this.output.appendLine('='.repeat(80));
     this.output.appendLine('');
 
-    try {
-      for (const item of selected) {
-        const configLabel = item.isCustom ? item.customName! : item.mode.toUpperCase();
-        this.output.appendLine(`--- [Batch Build] Setting build mode to: ${configLabel} ---`);
-        
-        // set the base buildMode
-        await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', item.mode, vscode.ConfigurationTarget.Workspace);
-        
-        // Set the customBuildConfiguration if necessary, otherwise clear it
-        const customValue = item.isCustom ? item.customName : '';
-        await vscode.workspace.getConfiguration('labwindowsCvi').update('customBuildConfiguration', customValue, vscode.ConfigurationTarget.Workspace);
-        
-        const ok = await this.build(actionChoice.rebuild, ref);
-        if (!ok) {
-          this.output.appendLine(`\n[CVI] !!! Batch Build aborted: failed on ${configLabel} !!!`);
-          vscode.window.showErrorMessage(`LabWindows/CVI: Batch Build failed on ${configLabel} configuration.`);
-          return;
-        }
-        successCount++;
-      }
+    this._isBuilding = true;
+    this._buildingProject = ref.absolutePath;
+    this._onDidChangeBuilding.fire({ isBuilding: true, projectPath: ref.absolutePath, label: `Batch Building ${ref.name}` });
+    void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', true);
 
-      this.output.appendLine('');
-      this.output.appendLine('='.repeat(80));
-      this.output.appendLine(` BATCH BUILD COMPLETED SUCCESSFULLY (${successCount}/${selected.length} configurations)`);
-      this.output.appendLine('='.repeat(80));
-      vscode.window.showInformationMessage(`LabWindows/CVI: Batch Build completed successfully (${successCount} configurations).`);
+    try {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `LabWindows/CVI: Batch Building ${ref.name}...`,
+          cancellable: false
+        },
+        async (progress) => {
+          for (let i = 0; i < selected.length; i++) {
+            const item = selected[i];
+            const configLabel = item.isCustom ? item.customName! : item.mode.toUpperCase();
+            progress.report({ message: `[${i + 1}/${selected.length}] ${configLabel}...` });
+            this.output.appendLine(`--- [Batch Build] Setting build mode to: ${configLabel} ---`);
+            
+            // set the base buildMode
+            await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', item.mode, vscode.ConfigurationTarget.Workspace);
+            
+            // Set the customBuildConfiguration if necessary, otherwise clear it
+            const customValue = item.isCustom ? item.customName : '';
+            await vscode.workspace.getConfiguration('labwindowsCvi').update('customBuildConfiguration', customValue, vscode.ConfigurationTarget.Workspace);
+            
+            const ok = await this.executeBuild(actionChoice.rebuild, ref, installation, progress);
+            if (!ok) {
+              this.output.appendLine(`\n[CVI] !!! Batch Build aborted: failed on ${configLabel} !!!`);
+              vscode.window.showErrorMessage(`LabWindows/CVI: Batch Build failed on ${configLabel} configuration.`);
+              return;
+            }
+            successCount++;
+          }
+
+          this.output.appendLine('');
+          this.output.appendLine('='.repeat(80));
+          this.output.appendLine(` BATCH BUILD COMPLETED SUCCESSFULLY (${successCount}/${selected.length} configurations)`);
+          this.output.appendLine('='.repeat(80));
+          vscode.window.showInformationMessage(`LabWindows/CVI: Batch Build completed successfully (${successCount} configurations).`);
+        }
+      );
     } finally {
       // Restore everything as it was before the batch
       await vscode.workspace.getConfiguration('labwindowsCvi').update('buildMode', originalMode, vscode.ConfigurationTarget.Workspace);
       await vscode.workspace.getConfiguration('labwindowsCvi').update('customBuildConfiguration', originalCustomConfig, vscode.ConfigurationTarget.Workspace);
+      this._isBuilding = false;
+      this._buildingProject = undefined;
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', false);
+      this._onDidChangeBuilding.fire({ isBuilding: false });
     }
   }
 
@@ -400,6 +578,10 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
     const ref = projectRef ?? this.workspaces.activeProjectRef;
     if (!ref?.exists) {
       vscode.window.showErrorMessage('No existing CVI project is available to provide compiler options.');
+      return false;
+    }
+    if (this._isBuilding) {
+      vscode.window.showWarningMessage('A LabWindows/CVI build is already in progress.');
       return false;
     }
     if (path.extname(filePath).toLowerCase() !== '.c') {
@@ -415,24 +597,46 @@ async batchBuildModal(projectRef?: CviWorkspaceProjectRef): Promise<void> {
       return false;
     }
 
-    const report = this.beginOutput(`Compile ${path.basename(filePath)}`);
-    let success = false;
-    try {
-      this.appendSection('SOURCE / TOOLCHAIN');
-      this.output.appendLine(`  Source    : ${filePath}`);
-      this.output.appendLine(`  Project   : ${ref.absolutePath}`);
-      this.output.appendLine(`  Compiler  : ${installation.compileExe}`);
-      this.output.appendLine('');
+    const baseName = path.basename(filePath);
+    this._isBuilding = true;
+    this._buildingProject = ref.absolutePath;
+    this._onDidChangeBuilding.fire({ isBuilding: true, projectPath: ref.absolutePath, label: `Compiling ${baseName}` });
+    void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', true);
 
-      const args = [filePath, ref.absolutePath, ...this.commonCompilerArguments(false)];
-      const result = await this.runCviCompile(installation.compileExe, args, path.dirname(ref.absolutePath), `Compile ${path.basename(filePath)}`);
-      success = result.success;
-      if (success) {
-        vscode.window.showInformationMessage(`${path.basename(filePath)} compiled successfully.`);
-      }
-      return success;
+    try {
+      return await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `LabWindows/CVI: Compiling ${baseName}...`,
+          cancellable: false
+        },
+        async () => {
+          const report = this.beginOutput(`Compile ${baseName}`);
+          let success = false;
+          try {
+            this.appendSection('SOURCE / TOOLCHAIN');
+            this.output.appendLine(`  Source    : ${filePath}`);
+            this.output.appendLine(`  Project   : ${ref.absolutePath}`);
+            this.output.appendLine(`  Compiler  : ${installation.compileExe}`);
+            this.output.appendLine('');
+
+            const args = [filePath, ref.absolutePath, ...this.commonCompilerArguments(false)];
+            const result = await this.runCviCompile(installation.compileExe!, args, path.dirname(ref.absolutePath), `Compile ${baseName}`);
+            success = result.success;
+            if (success) {
+              vscode.window.showInformationMessage(`${baseName} compiled successfully.`);
+            }
+            return success;
+          } finally {
+            this.finishOutput(report, success, success ? '' : `Compile ${baseName}`);
+          }
+        }
+      );
     } finally {
-      this.finishOutput(report, success, success ? '' : `Compile ${path.basename(filePath)}`);
+      this._isBuilding = false;
+      this._buildingProject = undefined;
+      void vscode.commands.executeCommand('setContext', 'labwindowsCvi.isBuilding', false);
+      this._onDidChangeBuilding.fire({ isBuilding: false });
     }
   }
 

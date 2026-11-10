@@ -2,6 +2,110 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.17] - 2026-11-10
+
+### Added
+- **Build In-Progress Activity Indicator**:
+  - Added real-time visual progress feedback during build, rebuild, clean, and batch compilation operations.
+  - Status bar item dynamically transforms into an animated spinner (`$(sync~spin) Building...`) while compiling.
+  - Integrated `vscode.window.withProgress` notification banners showing project compilation progress.
+  - Project items in the Workspace Explorer and CVI Actions views display animated busy status indicators during builds.
+  - Added build concurrency guards to safely prevent conflicting overlapping compilation jobs.
+- **Complete Build Options Coverage**:
+  - Implemented full parser and UI coverage for native CVI build and compiler options:
+    - Number of concurrent compiles (`labwindowsCvi.numberOfConcurrentCompiles` setting and project build option).
+    - Function prototypes requirement (`Require Prototypes`).
+    - Non-void function return values requirement (`Require Return Values`).
+    - Compiler-level uninitialized local variables check (`None`, `Conservative`, `Aggressive`).
+    - Quick compiler warning toggles: Unreferenced identifiers, Pointer type mismatch, Unreachable code, and Assignment in conditional.
+- **Process Threads Visualization During Debugging**:
+  - Added dedicated **CVI Process Threads** tree view (`labwindowsCvi.processThreads`) in the Run & Debug sidebar container.
+  - Real-time thread inspection via Debug Adapter Protocol (DAP) during debugging sessions (`cppdbg` / `cvi`).
+  - Automatic thread classification: Main GUI Thread, CVI Thread Pool Worker (`CmtScheduleThreadPoolFunction`), Worker Thread, and CVI Runtime Internal.
+  - Expandable thread nodes displaying call stack frames with click-to-open source code navigation.
+  - Process diagnostics summary with active thread counts and live CPU utilization percentage sampling.
+  - View toolbar actions for manual refresh (`$(refresh)`) and pausing all threads (`$(debug-pause)`).
+- **Custom Build Configurations Management ("Manage Configurations")**:
+  - Full support for user-defined build configurations beyond the four standard targets (`Debug`, `Release`, `Debug64`, `Release64`).
+  - Added `labwindowsCvi.manageConfigurations` command mirroring the native LabWindows/CVI dialog:
+    - Create new custom configurations inheriting compiler & linker settings from any existing configuration.
+    - Duplicate existing build configurations.
+    - Rename custom build configurations.
+    - Delete custom configurations from `.prj` files.
+    - Switch active build configuration.
+  - Enhanced `labwindowsCvi.selectBuildMode` and the status bar mode item to display and activate custom configurations.
+  - Seamless compiler integration: passing `-config=<Name>` to `compile.exe` when building a custom configuration.
+
+### Changed
+- **Auto-Save on Change in Settings Webviews**:
+  - Replaced manual "Save" buttons in Project Target Settings and Build Options panels with automatic saving on input/change/blur.
+  - Text inputs are debounced (350ms) to ensure smooth typing while checkboxes and selectors save immediately.
+  - Added real-time save status badge indicator (`Saved` / `Saving...`) in the header.
+
+### Removed
+- **Redundant "Open in CVI" Action Buttons**:
+  - Removed "Open in CVI" buttons from the CVI Home panel and the Build Settings panel header and Overview card. (The command remains available via the Command Palette).
+
+## [0.0.16] - 2026-11-09
+
+### Added
+- **Parameterized Settings Navigation**:
+  - Enhanced `labwindowsCvi.editTargetSettings` and `labwindowsCvi.editBuildSettings` to accept an optional target tab ID (e.g. `'build'`, `'dependencies'`), enabling direct programmatic and contextual jumps into specific settings sections.
+- **Roadmap & Milestone Tracking**:
+  - Added comprehensive `TODO.md` tracking all completed UX/UI items and outlining upcoming architectural features (Build options completion, alternative compilers, auto-saving settings, removing "Open in CVI" buttons, custom build configurations, and installer generation).
+
+### Changed
+- **Direct Tab Navigation from CVI Actions**:
+  - Clicking **Build steps** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Build steps** tab (Pre-build, Custom-build, and Post-build actions).
+  - Clicking **Dependencies** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Dependencies** tab (Project dependencies and build order).
+  - Implemented bidirectional Webview messaging (`activatePage`) ensuring that clicking an action immediately reveals, switches to, and scrolls to the target tab even if the settings panel is already open in the background.
+  - Eliminated UI flicker on initial panel load by generating HTML pre-scoped to the requested tab instead of defaulting to Overview.
+
+## [0.0.15] - 2026-11-09
+
+### Changed
+- **Show Full Pathnames Menu Action**:
+  - Updated context menu and title bar action label to "Show Full Pathnames" with dynamic checkmark (`✓ Show Full Pathnames`) when pathnames are toggled on.
+- **Home Page Activation & Startup Guard**:
+  - Fixed duplicate Home page tab creation when opening a CVI workspace from an empty VS Code window.
+  - Prevented automatic Home page opening on startup when a VS Code workspace is loaded, preserving the existing editor layout and tab state.
+- **Interactive CVI Actions View**:
+  - Streamlined the "CVI Actions" view by converting read-only status rows into interactive, clickable actions:
+    - *Build Mode*: triggers build mode selection.
+    - *Target Type*: triggers target type selection.
+    - *Command Line Arguments*: interactive prompt to view and edit command line parameters.
+    - *Working Directory*: interactive prompt with file-system folder picker to set the execution working directory.
+    - *Environment Variables*: interactive prompt to set custom execution environment variables.
+  - Added contextual edit buttons on hover for immediate configuration.
+
+### Removed
+- **Safe Mode Fallback Options**:
+  - Completely removed obsolete "Safe Mode" commands (`labwindowsCvi.editTargetSettingsSafeMode`, `labwindowsCvi.editBuildSettingsSafeMode`, `labwindowsCvi.editBuildOptionsSafeMode`) and their toolbar buttons across Target Settings, Build Settings, and Build Options panels.
+
+## [0.0.14] - 2026-11-09
+
+### Removed
+- **Redundant "Open the CVI home page" Action**:
+  - Removed duplicate action link from empty workspace explorer view welcome content. The Home page remains accessible via the title bar and status bar home actions.
+
+### Added
+- **Home Page Single-Instance Activation Guard**:
+  - Implemented `WebviewPanelSerializer` to restore existing Home page instances across window reloads without duplicating tabs.
+  - Added startup guard preventing duplicate tabs and redundant focus stealing on extension activation.
+- **Recent Workspaces & Projects Management**:
+  - Added global history tracking for recently opened CVI workspaces (`.cws`) and projects (`.prj`).
+  - Added interactive "Recent workspaces and projects" section to the CVI Home page with quick opening and item removal.
+  - Added `labwindowsCvi.openRecent` quick-pick command (`$(history)`) with inline removal and clear-all actions.
+  - Implemented intelligent associated workspace detection for standalone `.prj` files with configurable behavior (`labwindowsCvi.openProjectWorkspaceBehavior`: `prompt`, `openWorkspace`, or `openStandalone`).
+- **Project Tree View: Native CVI Layout, Ordering & Drag-and-Drop**:
+  - Eliminated synthetic/automatic folder hierarchies in favor of faithful LabWindows/CVI virtual folders matching `.prj` declarations.
+  - Files not assigned to a folder or marked `Not In A Folder` are placed directly at the project root.
+  - Exact preservation of folder and file order matching `.prj` sequence (`[Folders]` and `[File XXXX]` declarations) without alphabetical sorting.
+  - Added manual reordering commands (`labwindowsCvi.moveItemUp`, `labwindowsCvi.moveItemDown`) with `Alt+Up` / `Alt+Down` shortcut support.
+  - Added full drag-and-drop reordering: drag files before other files or into virtual folders/root; reorder virtual folders in `[Folders]`.
+  - Added context menu and title bar toggle for **Full File Paths** (`labwindowsCvi.toggleShowFullFilePaths` / `labwindowsCvi.showFullFilePaths`) switching between file name only and complete path display.
+  - Added multi-select batch support for contextual file actions (exclude, include, remove, toggle `.obj` compile, move to folder).
+
 ## [0.0.13] - 2026-11-05
 
 ### Added
