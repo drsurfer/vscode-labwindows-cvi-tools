@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { IniDocument, IniSection } from './iniDocument';
 import { CviBuildMode, CviProject, CviProjectFile, CviRunOptions, CviWorkspace, CviWorkspaceProjectRef } from './types';
-import { fromCviPath, normalizeRelativePath, quote, readCviTextFile, splitCviLongValue, toCviPath, toCviRuntimeStoragePath, unquote, writeCviTextFile } from '../utils/pathUtils';
+import { fileNameWithoutExtension, fromCviPath, normalizeRelativePath, quote, readCviTextFile, splitCviLongValue, toCviPath, toCviRuntimeStoragePath, unquote, writeCviTextFile } from '../utils/pathUtils';
 import { CviWarningLevel, formatWarningIdList, parseWarningIdList } from './cviWarningCatalog';
 
 
@@ -180,29 +180,20 @@ function reconstructValue(section: IniSection, key: string): string | undefined 
 }
 
 function setPossiblyLongValue(section: IniSection, key: string, value: string): void {
-  section.delete(key);
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  section.deleteMatching(new RegExp(`^\\s*${escapedKey} Line\\d{4}\\s*=`, 'i'));
-
   const cviValue = toCviPath(value);
   const chunks = splitCviLongValue(cviValue);
-  if (chunks.length === 1) {
-    section.set(key, quote(chunks[0]));
-    return;
-  }
-  chunks.forEach((chunk, index) => section.set(`${key} Line${String(index + 1).padStart(4, '0')}`, quote(chunk)));
+  const lines = chunks.length === 1
+    ? [`${key} = ${quote(chunks[0])}`]
+    : chunks.map((chunk, index) => `${key} Line${String(index + 1).padStart(4, '0')} = ${quote(chunk)}`);
+  section.replaceKeyLines(key, lines);
 }
 
 function setPossiblyLongStringValue(section: IniSection, key: string, value: string): void {
-  section.delete(key);
-  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  section.deleteMatching(new RegExp(`^\\s*${escapedKey} Line\\d{4}\\s*=`, 'i'));
   const chunks = splitCviLongValue(value);
-  if (chunks.length === 1) {
-    section.set(key, quote(chunks[0]));
-    return;
-  }
-  chunks.forEach((chunk, index) => section.set(`${key} Line${String(index + 1).padStart(4, '0')}`, quote(chunk)));
+  const lines = chunks.length === 1
+    ? [`${key} = ${quote(chunks[0])}`]
+    : chunks.map((chunk, index) => `${key} Line${String(index + 1).padStart(4, '0')} = ${quote(chunk)}`);
+  section.replaceKeyLines(key, lines);
 }
 
 function getProjectModeSection(document: IniDocument, mode: CviBuildMode): IniSection {
@@ -241,27 +232,95 @@ function writeStringList(section: IniSection, prefix: string, values: string[], 
   });
 }
 
+function writeExportFileList(section: IniSection, values: string[]): void {
+  const pattern = /^\s*Export File\s*\d+(?: Is Rel)?\s*=/i;
+  const firstIndex = section.lines.findIndex((l) => pattern.test(l));
+  const normalized = values.map((v) => v.trim()).filter(Boolean);
+  if (!normalized.length) {
+    if (firstIndex >= 0) {
+      section.deleteMatching(pattern);
+    }
+    return;
+  }
+  const newLines = normalized.map((v, i) => `Export File${i + 1} = ${quote(v)}`);
+  if (firstIndex >= 0) {
+    const before = section.lines.slice(0, firstIndex);
+    const after = section.lines.slice(firstIndex).filter((l) => !pattern.test(l));
+    section.lines = [...before, ...newLines, ...after];
+  } else {
+    let insertionIndex = section.lines.length;
+    while (insertionIndex > 0 && section.lines[insertionIndex - 1].trim() === '') {
+      insertionIndex -= 1;
+    }
+    section.lines.splice(insertionIndex, 0, ...newLines);
+  }
+}
+
 function resolveStoredPath(section: IniSection, key: string): string {
   const value = reconstructValue(section, key) ?? '';
   return value ? fromCviPath(value) : '';
 }
 
 function setProjectReferencedPath(section: IniSection, key: string, projectPath: string, value: string): void {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^\\s*${escapedKey}(?:\\s+Is Rel|\\s+Rel To|\\s+Rel Path|\\s*=|\\s+Line\\d{4}\\s*=)`, 'i');
+  const firstIndex = section.lines.findIndex((l) => pattern.test(l));
+
   const trimmed = value.trim();
-  deletePossiblyLongValue(section, `${key} Rel Path`);
-  section.delete(`${key} Rel To`);
   if (!trimmed) {
-    section.set(`${key} Is Rel`, 'False');
-    setPossiblyLongStringValue(section, key, '');
+    if (firstIndex < 0) {
+      return;
+    }
+    const currentVal = unquote(section.get(key));
+    const currentIsRel = section.get(`${key} Is Rel`);
+    if (currentVal === '' && currentIsRel === 'False') {
+      return;
+    }
+    const newLines = [
+      `${key} Is Rel = False`,
+      `${key} = ""`
+    ];
+    const before = section.lines.slice(0, firstIndex);
+    const after = section.lines.slice(firstIndex).filter((l) => !pattern.test(l));
+    section.lines = [...before, ...newLines, ...after];
     return;
   }
-  const projectDirectory = path.dirname(projectPath);
-  const absolutePath = path.isAbsolute(trimmed) ? trimmed : path.resolve(projectDirectory, trimmed);
+
+  const existingPath = unquote(section.get(key)) || reconstructValue(section, key);
+  if (existingPath && fromCviPath(existingPath).toLowerCase() === fromCviPath(trimmed).toLowerCase()) {
+    return;
+  }
+
+  const projectDirectory = path.dirname(fromCviPath(projectPath));
+  const normalizedTrimmed = fromCviPath(trimmed);
+  const absolutePath = path.isAbsolute(normalizedTrimmed) ? normalizedTrimmed : path.resolve(projectDirectory, normalizedTrimmed);
   const relativePath = normalizeRelativePath(projectDirectory, absolutePath);
-  section.set(`${key} Is Rel`, 'True');
-  section.set(`${key} Rel To`, quote('Project'));
-  setPossiblyLongStringValue(section, `${key} Rel Path`, relativePath);
-  setPossiblyLongValue(section, key, absolutePath);
+  const cviAbs = toCviPath(absolutePath);
+  const absChunks = splitCviLongValue(cviAbs);
+  const relChunks = splitCviLongValue(relativePath);
+
+  const newLines = [
+    `${key} Is Rel = True`,
+    `${key} Rel To = "Project"`,
+    ...(relChunks.length === 1
+      ? [`${key} Rel Path = ${quote(relChunks[0])}`]
+      : relChunks.map((c, i) => `${key} Rel Path Line${String(i + 1).padStart(4, '0')} = ${quote(c)}`)),
+    ...(absChunks.length === 1
+      ? [`${key} = ${quote(absChunks[0])}`]
+      : absChunks.map((c, i) => `${key} Line${String(i + 1).padStart(4, '0')} = ${quote(c)}`))
+  ];
+
+  if (firstIndex >= 0) {
+    const before = section.lines.slice(0, firstIndex);
+    const after = section.lines.slice(firstIndex).filter((l) => !pattern.test(l));
+    section.lines = [...before, ...newLines, ...after];
+  } else {
+    let insertionIndex = section.lines.length;
+    while (insertionIndex > 0 && section.lines[insertionIndex - 1].trim() === '') {
+      insertionIndex -= 1;
+    }
+    section.lines.splice(insertionIndex, 0, ...newLines);
+  }
 }
 
 function setOutputPath(section: IniSection, mode: CviBuildMode, projectPath: string, value: string): void {
@@ -271,12 +330,46 @@ function setOutputPath(section: IniSection, mode: CviBuildMode, projectPath: str
   if (!trimmed) {
     throw new Error('The target output path cannot be empty.');
   }
-  const projectDirectory = path.dirname(projectPath);
-  const absolutePath = path.isAbsolute(trimmed) ? trimmed : path.resolve(projectDirectory, trimmed);
-  section.set(`${key} Is Rel`, 'True');
-  section.set(`${key} Rel To`, quote('Project'));
-  setPossiblyLongStringValue(section, `${key} Rel Path`, normalizeRelativePath(projectDirectory, absolutePath));
-  setPossiblyLongValue(section, key, absolutePath);
+
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^\\s*${escapedKey}(?:\\s+Is Rel|\\s+Rel To|\\s+Rel Path|\\s*=|\\s+Line\\d{4}\\s*=)`, 'i');
+  const firstIndex = section.lines.findIndex((l) => pattern.test(l));
+
+  const existingPath = unquote(section.get(key)) || reconstructValue(section, key);
+  if (existingPath && fromCviPath(existingPath).toLowerCase() === fromCviPath(trimmed).toLowerCase()) {
+    return;
+  }
+
+  const projectDirectory = path.dirname(fromCviPath(projectPath));
+  const normalizedTrimmed = fromCviPath(trimmed);
+  const absolutePath = path.isAbsolute(normalizedTrimmed) ? normalizedTrimmed : path.resolve(projectDirectory, normalizedTrimmed);
+  const relativePath = normalizeRelativePath(projectDirectory, absolutePath);
+  const cviAbs = toCviPath(absolutePath);
+  const absChunks = splitCviLongValue(cviAbs);
+  const relChunks = splitCviLongValue(relativePath);
+
+  const newLines = [
+    `${key} Is Rel = True`,
+    `${key} Rel To = "Project"`,
+    ...(relChunks.length === 1
+      ? [`${key} Rel Path = ${quote(relChunks[0])}`]
+      : relChunks.map((c, i) => `${key} Rel Path Line${String(i + 1).padStart(4, '0')} = ${quote(c)}`)),
+    ...(absChunks.length === 1
+      ? [`${key} = ${quote(absChunks[0])}`]
+      : absChunks.map((c, i) => `${key} Line${String(i + 1).padStart(4, '0')} = ${quote(c)}`))
+  ];
+
+  if (firstIndex >= 0) {
+    const before = section.lines.slice(0, firstIndex);
+    const after = section.lines.slice(firstIndex).filter((l) => !pattern.test(l));
+    section.lines = [...before, ...newLines, ...after];
+  } else {
+    let insertionIndex = section.lines.length;
+    while (insertionIndex > 0 && section.lines[insertionIndex - 1].trim() === '') {
+      insertionIndex -= 1;
+    }
+    section.lines.splice(insertionIndex, 0, ...newLines);
+  }
 }
 
 
@@ -361,11 +454,12 @@ function resolveProjectFilePath(projectPath: string, section: IniSection): { abs
 }
 
 function modeSuffix(mode: CviBuildMode): string {
-  switch (mode) {
+  switch (String(mode).toLowerCase()) {
     case 'debug': return 'Debug';
     case 'release': return 'Release';
     case 'debug64': return 'Debug64';
     case 'release64': return 'Release64';
+    default: return String(mode);
   }
 }
 
@@ -579,6 +673,84 @@ function cviWorkspaceFileType(projectFileType: string, filePath: string): string
   return projectFileType || 'Other';
 }
 
+function hasAnyVersionInfo(info: CviVersionInfoSettings): boolean {
+  if (info.numericFileVersion && info.numericFileVersion !== '1,0,0,0') {
+    return true;
+  }
+  if (info.numericProductVersion && info.numericProductVersion !== '1,0,0,0') {
+    return true;
+  }
+  return Boolean(
+    info.comments ||
+    info.companyName ||
+    info.fileDescription ||
+    info.fileVersion ||
+    info.internalName ||
+    info.legalCopyright ||
+    info.legalTrademarks ||
+    info.originalFilename ||
+    info.privateBuild ||
+    info.productName ||
+    info.productVersion ||
+    info.specialBuild
+  );
+}
+
+function expandCviVersionMacros(
+  template: string,
+  context: {
+    mode: CviBuildMode;
+    outputPath: string;
+    applicationTitle: string;
+    numericFileVersion: string;
+    numericProductVersion: string;
+    companyName: string;
+  }
+): string {
+  if (!template || !template.includes('%')) {
+    return template;
+  }
+  const modeStr = String(context.mode);
+  const is64 = modeStr.toLowerCase().endsWith('64');
+  const isRelease = modeStr.toLowerCase().startsWith('release');
+  const arch = is64 ? 'x64' : 'x86';
+  const relDbg = isRelease ? 'Release' : 'Debug';
+  const filename = path.basename(fromCviPath(context.outputPath));
+  const basename = fileNameWithoutExtension(filename);
+  const application = context.applicationTitle.trim() || basename;
+
+  const fileParts = (context.numericFileVersion || '1,0,0,0').split(/[,.]/).map((p) => p.trim());
+  const prodParts = (context.numericProductVersion || '1,0,0,0').split(/[,.]/).map((p) => p.trim());
+
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const shortYear = String(now.getFullYear() % 100).padStart(2, '0');
+  const month = String(now.getMonth() + 1);
+  const day = String(now.getDate());
+
+  let result = template;
+  result = result.replace(/%company/g, context.companyName || '');
+  result = result.replace(/%application/g, application);
+  result = result.replace(/%rel_dbg/g, relDbg);
+  result = result.replace(/%arch/g, arch);
+  result = result.replace(/%basename/g, basename);
+  result = result.replace(/%filename/g, filename);
+  result = result.replace(/%f1/g, fileParts[0] ?? '0');
+  result = result.replace(/%f2/g, fileParts[1] ?? '0');
+  result = result.replace(/%f3/g, fileParts[2] ?? '0');
+  result = result.replace(/%f4/g, fileParts[3] ?? '0');
+  result = result.replace(/%p1/g, prodParts[0] ?? '0');
+  result = result.replace(/%p2/g, prodParts[1] ?? '0');
+  result = result.replace(/%p3/g, prodParts[2] ?? '0');
+  result = result.replace(/%p4/g, prodParts[3] ?? '0');
+  result = result.replace(/%Y/g, year);
+  result = result.replace(/%y/g, shortYear);
+  result = result.replace(/%m/g, month);
+  result = result.replace(/%d/g, day);
+
+  return result;
+}
+
 export class CviParser {
   parseWorkspace(workspacePath: string): CviWorkspace {
     const document = IniDocument.parse(readText(workspacePath));
@@ -779,19 +951,25 @@ export class CviParser {
       document.removeSection('Modules Forced Into Executable');
     }
     setBoolean(config, 'Use Dflt Import Lib Base Name', settings.useDefaultImportLibBaseName);
-    config.set('Import Lib Base Name', quote(settings.importLibBaseName));
+    if (settings.importLibBaseName.trim() || config.has('Import Lib Base Name')) {
+      config.set('Import Lib Base Name', quote(settings.importLibBaseName));
+    }
     config.set('Where to Copy DLL', quote(settings.whereToCopyDll));
     setProjectReferencedPath(config, 'Custom Directory to Copy DLL', projectPath, settings.customDirectoryToCopyDll);
     setBoolean(config, 'Use IVI Subdirectories for Import Libraries', settings.useIviSubdirectoriesForImportLibraries);
     setBoolean(config, 'Use VXIPNP Subdirectories for Import Libraries', settings.useVxiPnpSubdirectoriesForImportLibraries);
     config.set('DLL Exports', quote(settings.dllExports));
-    writeStringList(config, 'Export File', settings.exportFiles);
+    writeExportFileList(config, settings.exportFiles);
     setBoolean(config, 'Add Type Lib To DLL', settings.addTypeLibToDll);
     setBoolean(config, 'Include Type Lib Help Links', settings.includeTypeLibHelpLinks);
     config.set('TLB Help Style', quote(settings.tlbHelpStyle));
     setProjectReferencedPath(config, 'Type Lib FP File', projectPath, settings.typeLibFpFile);
-    setBoolean(config, 'Add NI Type Info To DLL', settings.addNiTypeInfoToDll);
-    setBoolean(config, 'Use Single Header for NI Type Info', settings.useSingleHeaderForNiTypeInfo);
+    if (settings.addNiTypeInfoToDll || config.has('Add NI Type Info To DLL')) {
+      setBoolean(config, 'Add NI Type Info To DLL', settings.addNiTypeInfoToDll);
+    }
+    if (settings.useSingleHeaderForNiTypeInfo || config.has('Use Single Header for NI Type Info')) {
+      setBoolean(config, 'Use Single Header for NI Type Info', settings.useSingleHeaderForNiTypeInfo);
+    }
     setProjectReferencedPath(config, 'Single Header NI Type Info File', projectPath, settings.singleHeaderNiTypeInfoFile);
     const versionPairs: Array<[string, string]> = [
       ['Comments', settings.versionInfo.comments],
@@ -807,12 +985,41 @@ export class CviParser {
       ['Product Version', settings.versionInfo.productVersion],
       ['Special Build', settings.versionInfo.specialBuild]
     ];
-    config.set('Numeric File Version', quote(settings.versionInfo.numericFileVersion));
-    config.set('Numeric Prod Version', quote(settings.versionInfo.numericProductVersion));
-    versionPairs.forEach(([key, value]) => {
-      config.set(key, quote(value));
-      config.set(`${key} Ex`, quote(value));
-    });
+    const resolvedCompany = (settings.versionInfo.companyName && !settings.versionInfo.companyName.includes('%company'))
+      ? settings.versionInfo.companyName
+      : (unquote(config.get('Company Name')) && !unquote(config.get('Company Name'))!.includes('%company'))
+        ? unquote(config.get('Company Name'))!
+        : '';
+
+    const macroContext = {
+      mode,
+      outputPath: settings.outputPath || resolveStoredPath(createExecutable, `Executable File_${modeSuffix(mode)}`),
+      applicationTitle: settings.applicationTitle,
+      numericFileVersion: settings.versionInfo.numericFileVersion,
+      numericProductVersion: settings.versionInfo.numericProductVersion,
+      companyName: resolvedCompany
+    };
+
+    if (config.has('Numeric File Version') || hasAnyVersionInfo(settings.versionInfo)) {
+      config.set('Numeric File Version', quote(settings.versionInfo.numericFileVersion));
+      config.set('Numeric Prod Version', quote(settings.versionInfo.numericProductVersion));
+      versionPairs.forEach(([key, value]) => {
+        const existingEx = unquote(config.get(`${key} Ex`));
+        if (value.includes('%')) {
+          config.set(`${key} Ex`, quote(value));
+          if (existingEx === value && config.has(key)) {
+            // Unchanged template macro: preserve existing evaluated string
+          } else {
+            config.set(key, quote(expandCviVersionMacros(value, macroContext)));
+          }
+        } else {
+          config.set(key, quote(value));
+          if (config.has(`${key} Ex`)) {
+            config.set(`${key} Ex`, quote(value));
+          }
+        }
+      });
+    }
     setBoolean(config, 'Sign', settings.signing.enabled);
     config.set('Sign Store', quote(settings.signing.store));
     config.set('Sign Certificate', quote(settings.signing.certificate));
@@ -857,7 +1064,7 @@ export class CviParser {
       } catch { /* ignore cws parsing error */ }
     }
 
-    const is64 = mode.endsWith('64');
+    const is64 = String(mode).toLowerCase().endsWith('64');
     const rawBaseAddr = unquote(config.get(is64 ? 'Image Base Address x64' : 'Image Base Address'))
       ?? unquote(config.get('Image Base Address'))
       ?? '4194304';
@@ -896,7 +1103,7 @@ export class CviParser {
     const document = IniDocument.parse(readText(projectPath));
     const config = getProjectModeSection(document, mode);
 
-    const is64 = mode.endsWith('64');
+    const is64 = String(mode).toLowerCase().endsWith('64');
     config.set('Default Calling Convention', quote(options.callingConvention));
     config.set('Stack Reserve', String(options.stackReserve));
     config.set('Stack Commit', String(options.stackCommit));
@@ -920,7 +1127,9 @@ export class CviParser {
     }
 
     config.set('Optimization Level', quote(options.optimizationLevel));
-    config.set('Compiler Defines', quote(options.compilerDefines));
+    if (options.compilerDefines.trim() || config.has('Compiler Defines')) {
+      config.set('Compiler Defines', quote(options.compilerDefines));
+    }
     setBoolean(config, 'Enable C99 Extensions', options.enableC99);
     setBoolean(config, 'Enable OpenMP Extensions', options.enableOpenMP);
     setBoolean(config, 'Show Warning IDs in Build Output', options.showWarningFlagsInBuildOutput);
@@ -928,11 +1137,23 @@ export class CviParser {
 
     const negDisabled = options.disabledWarningIds.map((id) => -Math.abs(id));
     const posErrors = options.errorWarningIds.map((id) => Math.abs(id));
-    config.set(`Warning List ${options.selectedWarningLevel}`, quote(formatWarningIdList(negDisabled)));
-    config.set(`Error List ${options.selectedWarningLevel}`, quote(formatWarningIdList(posErrors)));
+    const warningListStr = formatWarningIdList(negDisabled);
+    const errorListStr = formatWarningIdList(posErrors);
+    const warningKey = `Warning List ${options.selectedWarningLevel}`;
+    const errorKey = `Error List ${options.selectedWarningLevel}`;
+    if (warningListStr || config.has(warningKey)) {
+      config.set(warningKey, quote(warningListStr));
+    }
+    if (errorListStr || config.has(errorKey)) {
+      config.set(errorKey, quote(errorListStr));
+    }
 
-    setBoolean(config, 'Compile with Precompiled Include File', options.compileWithPrecompiledInclude);
-    setProjectReferencedPath(config, 'Precompiled Include File', projectPath, options.precompiledIncludeFile);
+    if (options.compileWithPrecompiledInclude || config.has('Compile with Precompiled Include File')) {
+      setBoolean(config, 'Compile with Precompiled Include File', options.compileWithPrecompiledInclude);
+    }
+    if (options.precompiledIncludeFile.trim() || config.has('Precompiled Include File')) {
+      setProjectReferencedPath(config, 'Precompiled Include File', projectPath, options.precompiledIncludeFile);
+    }
 
     writeText(projectPath, document.toString());
 
@@ -1155,10 +1376,16 @@ export class CviParser {
       if (!section) {
         return { actions: [], present: false };
       }
-      const actions = section.entries()
-        .filter(({ key }) => /^Build Action\d+$/i.test(key))
-        .sort((left, right) => numericSuffix(left.key) - numericSuffix(right.key))
-        .map(({ value }) => unquote(value) ?? '')
+      const indices = new Set<number>();
+      for (const { key } of section.entries()) {
+        const match = key.match(/^Build Action(\d+)(?:\s*Line\d{4})?$/i);
+        if (match) {
+          indices.add(Number(match[1]));
+        }
+      }
+      const sortedIndices = Array.from(indices).sort((a, b) => a - b);
+      const actions = sortedIndices
+        .map((index) => reconstructValue(section, `Build Action${index}`) ?? '')
         .filter(Boolean);
       return { actions, present: true };
     };
@@ -1178,20 +1405,20 @@ export class CviParser {
     const modeName = modeSuffix(mode);
     const writeActions = (kind: string, values: string[]): void => {
       const sectionName = `${modeName} ${kind}`;
-      const normalized = values.map((value) => String(value).trim()).filter(Boolean);
+      const normalized = values.map((value) => String(value ?? '')).filter((v) => v.trim().length > 0);
       if (!normalized.length) {
         document.removeSection(sectionName);
         return;
       }
       const section = document.ensureSection(sectionName, 'Signing Info');
-      section.deleteMatching(/^\s*Build Action\d+\s*=/i);
-      normalized.forEach((value, index) => section.set(`Build Action${index + 1}`, quote(value)));
+      section.deleteMatching(/^\s*Build Action\d+(?:\s*Line\d{4})?\s*=/i);
+      normalized.forEach((value, index) => setPossiblyLongStringValue(section, `Build Action${index + 1}`, value));
       if (!section.lines.some((line) => line.trim() === '')) {
         section.lines.push('');
       }
     };
-    writeActions('Custom Build Actions', actions.customBuildActions);
     writeActions('Pre-build Actions', actions.preBuildActions);
+    writeActions('Custom Build Actions', actions.customBuildActions);
     writeActions('Post-build Actions', actions.postBuildActions);
     writeText(projectPath, document.toString());
   }

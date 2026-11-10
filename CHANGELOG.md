@@ -2,6 +2,19 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.18] - 2026-11-10
+
+### Fixed
+- **Project (.prj) Serialization Fidelity (Static Library, Executable, DLL)**:
+  - Ensured 100% byte-for-byte serialization fidelity matching native LabWindows/CVI IDE output across all project types (`Static Library`, `Executable`, and `Dynamic Link Library`).
+  - **In-Place Key Replacement**: Replaced existing single-line and multi-line (`Line0001..LineXXXX`) INI key entries in-place (`replaceKeyLines`) preserving exact key ordering within sections.
+  - **Multi-Line Build Actions Preservation**: Added full support for multi-line build actions (`Build Action<N> Line<NNNN>`), preventing post-build actions from being cleared on save.
+  - **CVI Chunk Splitting Size**: Standardized long value string splitting (`splitCviLongValue`) to 80 characters matching native CVI line splitting rules.
+  - **Macro Evaluation vs Template Preservation**: Implemented `expandCviVersionMacros` for version templates (`%company`, `%application`, `%rel_dbg`, `%arch`, `%basename`, `%filename`, `%f1..%f4`, `%p1..%p4`, `%Y`) and preserved existing unedited version fields and evaluated strings without unwanted modification.
+  - **Conditional Key Writing**: Omitted unused/default keys (`Compiler Defines`, `Compile with Precompiled Include File`, `Add NI Type Info To DLL`, `Use Single Header for NI Type Info`, warning/error lists) when not present in original `.prj` or not enabled.
+  - **Export Files Formatting**: Formatted DLL export entries as `Export File1`, `Export File2` replacing in-place to match native CVI conventions.
+  - **Mode-Specific Output and Action Preservation**: Preserved configuration-specific target output paths and build actions when saving with scope `'all'`.
+
 ## [0.0.13] - 2026-11-05
 
 ### Added

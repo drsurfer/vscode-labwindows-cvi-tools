@@ -41,6 +41,24 @@ export class IniSection {
     this.lines = this.lines.filter((line) => !pattern.test(line));
   }
 
+  replaceKeyLines(key: string, newLines: string[]): void {
+    const escapedKey = escapeRegExp(key);
+    const pattern = new RegExp(`^\\s*${escapedKey}(?:\\s*=|\\s+Line\\d{4}\\s*=)`, 'i');
+    const firstIndex = this.lines.findIndex((line) => pattern.test(line));
+    if (firstIndex >= 0) {
+      const before = this.lines.slice(0, firstIndex);
+      const after = this.lines.slice(firstIndex).filter((line) => !pattern.test(line));
+      this.lines = [...before, ...newLines, ...after];
+      return;
+    }
+
+    let insertionIndex = this.lines.length;
+    while (insertionIndex > 0 && this.lines[insertionIndex - 1].trim() === '') {
+      insertionIndex -= 1;
+    }
+    this.lines.splice(insertionIndex, 0, ...newLines);
+  }
+
   deleteMatching(pattern: RegExp): void {
     this.lines = this.lines.filter((line) => !pattern.test(line));
   }

@@ -35,7 +35,7 @@ export function fromCviPath(inputPath: string): string {
   return value.replace(/\//g, path.sep);
 }
 
-export function splitCviLongValue(value: string, maxLength = 96): string[] {
+export function splitCviLongValue(value: string, maxLength = 80): string[] {
   if (value.length <= maxLength) {
     return [value];
   }
