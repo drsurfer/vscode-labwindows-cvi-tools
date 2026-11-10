@@ -1,5 +1,14 @@
 export type CviBuildMode = 'debug' | 'release' | 'debug64' | 'release64';
 
+export function modeDescription(mode: CviBuildMode): string {
+  switch (mode) {
+    case 'release': return 'Release x86';
+    case 'debug64': return 'Debug x64';
+    case 'release64': return 'Release x64';
+    default: return 'Debug x86';
+  }
+}
+
 export interface CviRunOptions {
   arguments: string;
   workingDirectory: string;

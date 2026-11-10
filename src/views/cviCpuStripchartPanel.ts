@@ -42,6 +42,20 @@ export class CviCpuStripchartPanel {
     this._extensionUri = extensionUri;
 
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+    this._panel.webview.onDidReceiveMessage((msg) => {
+      if (msg?.type === 'ready') {
+        const info = this.tracker.processInfo;
+        if (info) {
+          this.updateData({
+            processName: info.processName || 'CVI Process',
+            processId: info.processId,
+            cpuPercent: info.cpuPercent,
+            cpuHistory: info.cpuHistory,
+            threads: info.threads
+          });
+        }
+      }
+    }, null, this._disposables);
     this._panel.webview.html = this._getHtmlForWebview();
 
     // Initial update if process info is already present
@@ -293,6 +307,7 @@ export class CviCpuStripchartPanel {
   </div>
 
   <script>
+    const vscodeApi = acquireVsCodeApi();
     const canvas = document.getElementById('stripchartCanvas');
     const ctx = canvas.getContext('2d');
     const procTitle = document.getElementById('procTitle');
@@ -500,6 +515,7 @@ export class CviCpuStripchartPanel {
     });
 
     setTimeout(resizeCanvas, 50);
+    vscodeApi.postMessage({ type: 'ready' });
   </script>
 </body>
 </html>`;

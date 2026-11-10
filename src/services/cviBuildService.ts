@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import * as vscode from 'vscode';
-import { CviBuildMode, CviWorkspaceProjectRef } from '../model/types';
+import { CviBuildMode, CviWorkspaceProjectRef, modeDescription } from '../model/types';
 import { CviParser } from '../model/cviParser';
 import { CviInstallation, CviWorkspace } from '../model/types';
 import { CviInstallationService } from './cviInstallationService';
@@ -204,15 +204,20 @@ export class CviBuildService {
     }
 
     const config = vscode.workspace.getConfiguration('labwindowsCvi');
+    const target = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0)
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+
     if (selected.customConfigName) {
-      await config.update('buildMode', selected.value, vscode.ConfigurationTarget.Workspace);
-      await config.update('customBuildConfiguration', selected.customConfigName, vscode.ConfigurationTarget.Workspace);
+      await config.update('buildMode', selected.value, target);
+      await config.update('customBuildConfiguration', selected.customConfigName, target);
       vscode.window.showInformationMessage(`Active configuration: ${selected.customConfigName} (${selected.value}).`);
     } else {
-      await config.update('buildMode', selected.value, vscode.ConfigurationTarget.Workspace);
-      await config.update('customBuildConfiguration', '', vscode.ConfigurationTarget.Workspace);
+      await config.update('buildMode', selected.value, target);
+      await config.update('customBuildConfiguration', '', target);
       vscode.window.showInformationMessage(`Active configuration: ${selected.label}.`);
     }
+    this.workspaces.refresh();
   }
 
   async build(rebuild = false, projectRef?: CviWorkspaceProjectRef): Promise<boolean> {
@@ -305,12 +310,14 @@ export class CviBuildService {
         const cwd = path.dirname(item.absolutePath);
         const settings = this.projectSettings.getSettings(item);
         const project = this.workspaces.getProject(item);
-        const targetPath = this.parser.getTargetPath(item.absolutePath, this.buildMode);
+        const { args: compilerArgs, effective } = this.compilerArgumentsForProject(item, rebuild, ref);
+        const targetPath = this.parser.getTargetPath(item.absolutePath, effective.customName || effective.mode);
         const nativeBuildActions = this.projectSettings.hasNativeBuildActions(item);
 
         this.appendSection('PROJECT / TOOLCHAIN');
         this.output.appendLine(`  Project   : ${item.name}`);
         this.output.appendLine(`  Project   : ${item.absolutePath}`);
+        this.output.appendLine(`  Config    : ${effective.displayLabel}`);
         this.output.appendLine(`  Target    : ${targetPath ? normalizeRuntimePath(targetPath) : '<not resolved from .prj>'}`);
         this.output.appendLine(`  Type      : ${project?.targetType ?? '<unknown>'}`);
         this.output.appendLine(`  Compiler  : ${installation.compileExe}`);
@@ -334,15 +341,15 @@ export class CviBuildService {
           }
         }
 
-        const args: string[] = [item.absolutePath, ...this.commonCompilerArguments(rebuild)];
-        const result = await this.runCviCompile(installation.compileExe!, args, cwd, `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`);
+        const args: string[] = [item.absolutePath, ...compilerArgs];
+        const result = await this.runCviCompile(installation.compileExe!, args, cwd, `${rebuild ? 'Rebuild' : 'Build'} ${item.name} (${effective.displayLabel})`);
         if (!result.success) {
           failedAt = this.currentReport?.failedAt ?? `${rebuild ? 'Rebuild' : 'Build'} ${item.name}`;
           return false;
         }
         report.projectBuilt += 1;
 
-        if ((this.buildMode === 'debug' || this.buildMode === 'debug64') && targetPath && project?.targetType !== 'Static Library') {
+        if ((effective.mode === 'debug' || effective.mode === 'debug64') && targetPath && project?.targetType !== 'Static Library') {
           const normTarget = normalizeRuntimePath(targetPath);
           if (fs.existsSync(normTarget)) {
             await this.gdbService.enableDwarfSymbols(normTarget);
@@ -391,7 +398,8 @@ export class CviBuildService {
           let success = true;
           try {
             const project = this.workspaces.getProject(ref);
-            const target = this.parser.getTargetPath(ref.absolutePath, this.buildMode);
+            const effective = this.resolveProjectEffectiveBuildConfig(ref, ref);
+            const target = this.parser.getTargetPath(ref.absolutePath, effective.customName || effective.mode);
             const candidates = new Set<string>();
             if (target) {
               candidates.add(target);
@@ -614,14 +622,16 @@ export class CviBuildService {
           const report = this.beginOutput(`Compile ${baseName}`);
           let success = false;
           try {
+            const { args: compilerArgs, effective } = this.compilerArgumentsForProject(ref, false, ref);
             this.appendSection('SOURCE / TOOLCHAIN');
             this.output.appendLine(`  Source    : ${filePath}`);
             this.output.appendLine(`  Project   : ${ref.absolutePath}`);
+            this.output.appendLine(`  Config    : ${effective.displayLabel}`);
             this.output.appendLine(`  Compiler  : ${installation.compileExe}`);
             this.output.appendLine('');
 
-            const args = [filePath, ref.absolutePath, ...this.commonCompilerArguments(false)];
-            const result = await this.runCviCompile(installation.compileExe!, args, path.dirname(ref.absolutePath), `Compile ${baseName}`);
+            const args = [filePath, ref.absolutePath, ...compilerArgs];
+            const result = await this.runCviCompile(installation.compileExe!, args, path.dirname(ref.absolutePath), `Compile ${baseName} (${effective.displayLabel})`);
             success = result.success;
             if (success) {
               vscode.window.showInformationMessage(`${baseName} compiled successfully.`);
@@ -665,7 +675,8 @@ export class CviBuildService {
     }
     const project = this.workspaces.getProject(ref);
     const run = this.projectSettings.getSettings(ref).run;
-    const targetPath = this.parser.getTargetPath(ref.absolutePath, this.buildMode);
+    const effective = this.resolveProjectEffectiveBuildConfig(ref, ref);
+    const targetPath = this.parser.getTargetPath(ref.absolutePath, effective.customName || effective.mode);
     const useExternalHost = project?.targetType === 'Dynamic Link Library' && run.externalProcessPath.trim().length > 0;
     const rawExecutablePath = useExternalHost ? run.externalProcessPath.trim() : targetPath;
     if (!rawExecutablePath) {
@@ -731,7 +742,8 @@ export class CviBuildService {
 
     const project = this.workspaces.getProject(ref);
     const run = this.projectSettings.getSettings(ref).run;
-    const targetPath = this.parser.getTargetPath(ref.absolutePath, this.buildMode);
+    const effective = this.resolveProjectEffectiveBuildConfig(ref, ref);
+    const targetPath = this.parser.getTargetPath(ref.absolutePath, effective.customName || effective.mode);
     const useExternalHost = project?.targetType === 'Dynamic Link Library' && run.externalProcessPath.trim().length > 0;
     const rawExecutablePath = useExternalHost ? run.externalProcessPath.trim() : targetPath;
     if (!rawExecutablePath) {
@@ -1027,15 +1039,81 @@ export class CviBuildService {
     return installation;
   }
 
-  private commonCompilerArguments(rebuild: boolean): string[] {
+  resolveProjectEffectiveBuildConfig(
+    item: CviWorkspaceProjectRef,
+    activeRef?: CviWorkspaceProjectRef
+  ): { mode: CviBuildMode; customName?: string; displayLabel: string } {
     const config = vscode.workspace.getConfiguration('labwindowsCvi');
-    const customConfig = config.get<string>('customBuildConfiguration', '').trim();
+    const activeCustom = config.get<string>('customBuildConfiguration', '').trim();
+    const baseMode = this.buildMode;
+    const is64Bit = baseMode.toLowerCase().endsWith('64');
+    const isRelease = baseMode.toLowerCase().startsWith('release');
+    const standardLabel = modeDescription(baseMode);
+
+    if (!activeCustom) {
+      return { mode: baseMode, displayLabel: standardLabel };
+    }
+
+    const currentActive = activeRef ?? this.workspaces.activeProjectRef;
+    const isActive = currentActive
+      ? item.absolutePath.toLowerCase() === currentActive.absolutePath.toLowerCase()
+      : true;
+
+    if (isActive) {
+      return {
+        mode: baseMode,
+        customName: activeCustom,
+        displayLabel: `${activeCustom} (${standardLabel})`
+      };
+    }
+
+    // For secondary projects: check if a custom config with same name, bitness, and mode exists
+    try {
+      const customs = this.parser.getCustomConfigurations(item.absolutePath);
+      const matching = customs.find(
+        (c) =>
+          c.name.toLowerCase() === activeCustom.toLowerCase() &&
+          c.is64Bit === is64Bit &&
+          c.isRelease === isRelease
+      );
+      if (matching) {
+        return {
+          mode: baseMode,
+          customName: matching.name,
+          displayLabel: `${matching.name} (${standardLabel})`
+        };
+      }
+    } catch {
+      // Ignore parsing errors on secondary projects
+    }
+
+    // Otherwise, build secondary project using its standard configuration matching same bitness & mode
+    return {
+      mode: baseMode,
+      displayLabel: `${standardLabel} (Standard fallback)`
+    };
+  }
+
+  compilerArgumentsForProject(
+    item: CviWorkspaceProjectRef,
+    rebuild: boolean,
+    activeRef?: CviWorkspaceProjectRef
+  ): { args: string[]; effective: { mode: CviBuildMode; customName?: string; displayLabel: string } } {
+    const effective = this.resolveProjectEffectiveBuildConfig(item, activeRef);
+    const config = vscode.workspace.getConfiguration('labwindowsCvi');
     const extraArguments = config.get<string[]>('extraCompilerArguments', []);
-    const args: string[] = [`-${this.buildMode}`];
+    const args: string[] = [`-${effective.mode}`];
     if (rebuild) args.push('-rebuild');
-    if (customConfig) args.push(`-config=${customConfig}`);
+    if (effective.customName) {
+      args.push(`-config=${effective.customName}`);
+    }
     args.push(...extraArguments);
-    return args;
+    return { args, effective };
+  }
+
+  private commonCompilerArguments(rebuild: boolean): string[] {
+    const ref = this.workspaces.activeProjectRef ?? { absolutePath: '', name: '', index: 0, relativePath: '', exists: false };
+    return this.compilerArgumentsForProject(ref, rebuild).args;
   }
 
   private async runCviCompile(compileExe: string, args: string[], cwd: string, label: string): Promise<CviToolRunResult> {

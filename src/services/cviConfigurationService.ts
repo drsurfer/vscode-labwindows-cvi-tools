@@ -133,7 +133,7 @@ export class CviConfigurationService {
 
   async promptAddConfiguration(ref: CviWorkspaceProjectRef): Promise<void> {
     const name = await vscode.window.showInputBox({
-      title: 'Add New CVI Build Configuration — Step 1 of 4',
+      title: 'Add New CVI Build Configuration — Step 1 of 2 (or 4)',
       prompt: 'Enter a name for the new configuration (e.g. Profiling, UnitTesting, HighOptimization)',
       validateInput: (val) => {
         const clean = val.trim();
@@ -153,91 +153,126 @@ export class CviConfigurationService {
     if (!name?.trim()) return;
     const cleanName = name.trim();
 
-    // Step 2: Bit-ness (32-bit vs 64-bit) as in native LabWindows/CVI
-    const bitnessChoice = await vscode.window.showQuickPick(
-      [
-        { label: '$(server) 64-bit (x64)', value: true, description: 'Target 64-bit Windows architecture' },
-        { label: '$(device-desktop) 32-bit (x86)', value: false, description: 'Target 32-bit Windows architecture' }
-      ],
-      {
-        title: `New Configuration "${cleanName}" — Step 2 of 4: Target Architecture`,
-        placeHolder: 'Select 64-bit or 32-bit bitness'
-      }
-    );
-
-    if (!bitnessChoice) return;
-    const is64Bit = bitnessChoice.value;
-
-    // Step 3: Build Mode (Debug vs Release) as in native LabWindows/CVI
-    const modeChoice = await vscode.window.showQuickPick(
-      [
-        { label: '$(bug) Debug', value: false, description: 'Generate debugging symbols, runtime checking enabled' },
-        { label: '$(rocket) Release', value: true, description: 'Compiler optimizations enabled, release symbols' }
-      ],
-      {
-        title: `New Configuration "${cleanName}" — Step 3 of 4: Build Mode`,
-        placeHolder: 'Select Debug or Release build mode'
-      }
-    );
-
-    if (!modeChoice) return;
-    const isRelease = modeChoice.value;
-
-    // Step 4: Copy settings from existing configuration
-    const defaultBaseKey = is64Bit ? (isRelease ? 'release64' : 'debug64') : (isRelease ? 'release' : 'debug');
+    // Step 2: Choose whether to copy settings from an existing configuration OR create a blank one
     const customConfigs = this.parser.getCustomConfigurations(ref.absolutePath);
-    const baseOptions: Array<{ label: string; value: string; is64?: boolean; isRelease?: boolean }> = [
+    interface CopySourceItem extends vscode.QuickPickItem {
+      isCopy: boolean;
+      value?: string;
+      is64?: boolean;
+      isRelease?: boolean;
+    }
+
+    const sourceOptions: CopySourceItem[] = [
       {
-        label: is64Bit
-          ? (isRelease ? '$(rocket) Release x64 (Recommended)' : '$(gear) Debug x64 (Recommended)')
-          : (isRelease ? '$(rocket) Release x86 (Recommended)' : '$(gear) Debug x86 (Recommended)'),
-        value: defaultBaseKey,
-        is64: is64Bit,
-        isRelease
+        label: '$(gear) Debug x64 (Standard 64-bit Debug)',
+        description: 'Inherits 64-bit Debug settings',
+        isCopy: true,
+        value: 'debug64',
+        is64: true,
+        isRelease: false
       },
-      ...['debug', 'release', 'debug64', 'release64']
-        .filter((k) => k !== defaultBaseKey)
-        .map((k) => ({
-          label: k === 'debug' ? '$(gear) Debug x86' : k === 'release' ? '$(rocket) Release x86' : k === 'debug64' ? '$(gear) Debug x64' : '$(rocket) Release x64',
-          value: k,
-          is64: k.endsWith('64'),
-          isRelease: k.toLowerCase().includes('release')
-        })),
-      ...customConfigs.map((c) => ({
-        label: `$(layers) Copy settings from ${c.name}`,
+      {
+        label: '$(rocket) Release x64 (Standard 64-bit Release)',
+        description: 'Inherits 64-bit Release settings',
+        isCopy: true,
+        value: 'release64',
+        is64: true,
+        isRelease: true
+      },
+      {
+        label: '$(gear) Debug x86 (Standard 32-bit Debug)',
+        description: 'Inherits 32-bit Debug settings',
+        isCopy: true,
+        value: 'debug',
+        is64: false,
+        isRelease: false
+      },
+      {
+        label: '$(rocket) Release x86 (Standard 32-bit Release)',
+        description: 'Inherits 32-bit Release settings',
+        isCopy: true,
+        value: 'release',
+        is64: false,
+        isRelease: true
+      }
+    ];
+
+    for (const c of customConfigs) {
+      const arch = c.is64Bit ? 'x64' : 'x86';
+      const mode = c.isRelease ? 'Release' : 'Debug';
+      sourceOptions.push({
+        label: `$(layers) ${c.name}`,
+        description: `Custom ${arch} ${mode} configuration`,
+        isCopy: true,
         value: c.name,
         is64: c.is64Bit,
         isRelease: c.isRelease
-      }))
-    ];
+      });
+    }
 
-    const baseChoice = await vscode.window.showQuickPick(baseOptions, {
-      title: `New Configuration "${cleanName}" — Step 4 of 4: Copy Settings From`,
-      placeHolder: 'Select a base configuration to inherit compiler & linker options from'
+    sourceOptions.push({
+      label: '$(file) Do not copy (create blank configuration with default settings)',
+      description: 'Prompts for target architecture and build mode, with clean CVI defaults',
+      isCopy: false
     });
 
-    if (!baseChoice) return;
+    const sourceChoice = await vscode.window.showQuickPick(sourceOptions, {
+      title: `New Configuration "${cleanName}" — Select Base Configuration`,
+      placeHolder: 'Select an existing configuration to copy from, or choose blank defaults'
+    });
+
+    if (!sourceChoice) return;
+
+    let is64Bit = sourceChoice.is64 ?? true;
+    let isRelease = sourceChoice.isRelease ?? false;
+    let baseConfigName: string | undefined = sourceChoice.value;
+
+    if (!sourceChoice.isCopy) {
+      // User chose blank configuration: prompt for bitness and mode
+      const bitnessChoice = await vscode.window.showQuickPick(
+        [
+          { label: '$(server) 64-bit (x64)', value: true, description: 'Target 64-bit Windows architecture' },
+          { label: '$(device-desktop) 32-bit (x86)', value: false, description: 'Target 32-bit Windows architecture' }
+        ],
+        {
+          title: `New Configuration "${cleanName}" — Step 3 of 4: Target Architecture`,
+          placeHolder: 'Select 64-bit or 32-bit bitness'
+        }
+      );
+
+      if (!bitnessChoice) return;
+      is64Bit = bitnessChoice.value;
+
+      const modeChoice = await vscode.window.showQuickPick(
+        [
+          { label: '$(bug) Debug', value: false, description: 'Generate debugging symbols, runtime checking enabled' },
+          { label: '$(rocket) Release', value: true, description: 'Compiler optimizations enabled, release symbols' }
+        ],
+        {
+          title: `New Configuration "${cleanName}" — Step 4 of 4: Build Mode`,
+          placeHolder: 'Select Debug or Release build mode'
+        }
+      );
+
+      if (!modeChoice) return;
+      isRelease = modeChoice.value;
+      baseConfigName = undefined;
+    }
 
     try {
       this.parser.addCustomConfiguration(
         ref.absolutePath,
         cleanName,
-        baseChoice.value,
+        baseConfigName,
         is64Bit,
         isRelease
       );
 
-      const activate = await vscode.window.showInformationMessage(
-        `Created build configuration "${cleanName}" (${is64Bit ? 'x64' : 'x86'} ${isRelease ? 'Release' : 'Debug'}). Set as active configuration now?`,
-        'Yes',
-        'No'
+      // Immediately activate new configuration so CVI Actions updates right away
+      await this.setActiveConfiguration(ref, cleanName);
+      vscode.window.showInformationMessage(
+        `Build configuration "${cleanName}" (${is64Bit ? 'x64' : 'x86'} ${isRelease ? 'Release' : 'Debug'}) created and set as active.`
       );
-
-      if (activate === 'Yes') {
-        await this.setActiveConfiguration(ref, cleanName);
-      } else {
-        this.workspaces.refresh();
-      }
     } catch (err) {
       vscode.window.showErrorMessage(`Failed to add configuration: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -279,8 +314,8 @@ export class CviConfigurationService {
 
     try {
       this.parser.duplicateConfiguration(ref.absolutePath, source.value, targetName.trim());
-      vscode.window.showInformationMessage(`Configuration "${targetName.trim()}" duplicated from "${source.value}".`);
-      this.workspaces.refresh();
+      await this.setActiveConfiguration(ref, targetName.trim());
+      vscode.window.showInformationMessage(`Configuration "${targetName.trim()}" duplicated from "${source.value}" and set as active.`);
     } catch (err) {
       vscode.window.showErrorMessage(`Failed to duplicate configuration: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -368,18 +403,22 @@ export class CviConfigurationService {
 
   async setActiveConfiguration(ref: CviWorkspaceProjectRef, customName?: string, standardMode?: CviBuildMode): Promise<void> {
     const config = vscode.workspace.getConfiguration('labwindowsCvi');
+    const target = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0)
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+
     if (customName) {
       const customs = this.parser.getCustomConfigurations(ref.absolutePath);
       const found = customs.find((c) => c.name.toLowerCase() === customName.toLowerCase());
       const baseMode: CviBuildMode = found
         ? found.is64Bit ? (found.isRelease ? 'release64' : 'debug64') : (found.isRelease ? 'release' : 'debug')
         : 'debug';
-      await config.update('buildMode', baseMode, vscode.ConfigurationTarget.Workspace);
-      await config.update('customBuildConfiguration', customName, vscode.ConfigurationTarget.Workspace);
+      await config.update('buildMode', baseMode, target);
+      await config.update('customBuildConfiguration', customName, target);
       vscode.window.showInformationMessage(`Active build configuration: ${customName} (${baseMode}).`);
     } else if (standardMode) {
-      await config.update('buildMode', standardMode, vscode.ConfigurationTarget.Workspace);
-      await config.update('customBuildConfiguration', '', vscode.ConfigurationTarget.Workspace);
+      await config.update('buildMode', standardMode, target);
+      await config.update('customBuildConfiguration', '', target);
       vscode.window.showInformationMessage(`Active build mode: ${standardMode}.`);
     }
     this.workspaces.refresh();

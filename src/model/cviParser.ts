@@ -1367,7 +1367,7 @@ export class CviParser {
     return configs.sort((a, b) => a.index - b.index);
   }
 
-  addCustomConfiguration(projectPath: string, name: string, baseConfigName: string, is64Bit?: boolean, isRelease?: boolean): void {
+  addCustomConfiguration(projectPath: string, name: string, baseConfigName?: string, is64Bit?: boolean, isRelease?: boolean): void {
     const document = IniDocument.parse(readText(projectPath));
     const cleanName = name.trim();
     if (!cleanName) {
@@ -1378,7 +1378,15 @@ export class CviParser {
       throw new Error(`A configuration named "${cleanName}" already exists.`);
     }
 
-    const baseSection = getProjectModeSection(document, baseConfigName);
+    const header = document.getSection('Project Header');
+    const targetType = unquote(header?.get('Target Type')) ?? 'Executable';
+    const ext = targetType === 'Dynamic Link Library' ? '.dll' : targetType === 'Static Library' ? '.lib' : '.exe';
+    const baseName = path.basename(projectPath, path.extname(projectPath));
+    const defaultOutputFileName = `${baseName}${ext}`;
+
+    const effective64 = is64Bit !== undefined ? is64Bit : (baseConfigName ? baseConfigName.endsWith('64') : true);
+    const effectiveRelease = isRelease !== undefined ? isRelease : (baseConfigName ? baseConfigName.toLowerCase().includes('release') : false);
+
     let customHeaders = document.getSection('Custom Build Configs');
     if (!customHeaders) {
       customHeaders = new IniSection('Custom Build Configs', []);
@@ -1393,20 +1401,70 @@ export class CviParser {
     const newSectionName = `Custom Build Config ${nextIndex}`;
     const newSection = new IniSection(newSectionName, []);
 
-    for (const entry of baseSection.entries()) {
-      newSection.set(entry.key, entry.value);
+    if (baseConfigName) {
+      const baseSection = getProjectModeSection(document, baseConfigName);
+      for (const entry of baseSection.entries()) {
+        newSection.set(entry.key, entry.value);
+      }
+    } else {
+      // Default compiler and linker settings for blank custom configuration
+      newSection.set('Default Calling Convention', quote('cdecl'));
+      newSection.set('Optimization Level', quote(effectiveRelease ? 'Optimize for speed (level 2)' : 'No optimizations'));
+      newSection.set('Require Prototypes', 'True');
+      newSection.set('Show Warning IDs in Build Output', 'False');
+      newSection.set('Selected Warning Level', quote('Common'));
+      newSection.set('Warning List None', quote(''));
+      newSection.set('Error List None', quote(''));
+      newSection.set('Warning List Common', quote(''));
+      newSection.set('Error List Common', quote(''));
+      newSection.set('Warning List Extended', quote(''));
+      newSection.set('Error List Extended', quote(''));
+      newSection.set('Warning List All', quote(''));
+      newSection.set('Error List All', quote(''));
+      newSection.set('Warning Mode', '0');
+      newSection.set('Enable Unreferenced Identifiers Warning', 'True');
+      newSection.set('Enable Pointer Mismatch Warning', 'True');
+      newSection.set('Enable Unreachable Code Warning', 'True');
+      newSection.set('Enable Assignment In Conditional Warning', 'True');
+      newSection.set('Uninitialized Locals Compile Warning', quote('Aggressive'));
+      newSection.set('Require Return Values', 'True');
+      newSection.set('Enable C99 Extensions', 'True');
+      newSection.set('Enable OpenMP Extensions', 'False');
+      newSection.set('Stack Size', '250000');
+      newSection.set('Stack Reserve', '1048576');
+      newSection.set('Stack Commit', '4096');
+      newSection.set('Image Base Address', '4194304');
+      newSection.set('Image Base Address x64', '4194304');
+      newSection.set('Compiler Defines', quote('/DWIN32_LEAN_AND_MEAN'));
+      newSection.set('Sign', 'False');
+      newSection.set('Sign Store', quote(''));
+      newSection.set('Sign Certificate', quote(''));
+      newSection.set('Sign Timestamp URL', quote(''));
+      newSection.set('Sign URL', quote(''));
+      newSection.set('Manifest Embed', 'False');
+      newSection.set('Icon File Is Rel', 'False');
+      newSection.set('Icon File', quote(''));
+      newSection.set('Application Title', quote(''));
+      newSection.set('Use IVI Subdirectories for Import Libraries', 'False');
+      newSection.set('Use VXIPNP Subdirectories for Import Libraries', 'False');
+      newSection.set('Use Dflt Import Lib Base Name', 'True');
+      newSection.set('Where to Copy DLL', quote('Do not copy'));
+      newSection.set('Custom Directory to Copy DLL Is Rel', 'False');
+      newSection.set('Custom Directory to Copy DLL', quote(''));
+      newSection.set('Generate Source Documentation', quote('None'));
+      newSection.set('Runtime Support', quote('Full Runtime Support'));
+      newSection.set('Runtime Binding', quote('Shared'));
+      newSection.set('Embed Project .UIRs', 'False');
+      newSection.set('Generate Map File', 'False');
+      newSection.set('Embed Timestamp', 'True');
+      newSection.set('Create Console Application', 'False');
+      newSection.set('Using LoadExternalModule', 'False');
+      newSection.set('DLL Exports', quote('Include File Symbols'));
     }
+
     newSection.set('Config Name', quote(cleanName));
-    if (is64Bit !== undefined) {
-      setBoolean(newSection, 'Is 64-Bit', is64Bit);
-    } else if (!newSection.has('Is 64-Bit')) {
-      setBoolean(newSection, 'Is 64-Bit', baseConfigName.endsWith('64'));
-    }
-    if (isRelease !== undefined) {
-      setBoolean(newSection, 'Is Release', isRelease);
-    } else if (!newSection.has('Is Release')) {
-      setBoolean(newSection, 'Is Release', baseConfigName.toLowerCase().includes('release'));
-    }
+    setBoolean(newSection, 'Is 64-Bit', effective64);
+    setBoolean(newSection, 'Is Release', effectiveRelease);
 
     customHeaders.set('Num Custom Build Configs', String(nextIndex));
 
@@ -1417,38 +1475,30 @@ export class CviParser {
       document.sections.push(newSection);
     }
 
-    // Replicate executable file entries in [Create Executable]
+    // Set or replicate executable file entries in [Create Executable]
     const createExec = document.getSection('Create Executable');
     if (createExec) {
-      const baseKey = `Executable File_${configSuffix(baseConfigName)}`;
-      const basePrefix = baseKey.toLowerCase();
       let copiedAny = false;
-      for (const entry of [...createExec.entries()]) {
-        const kLower = entry.key.toLowerCase();
-        if (kLower === basePrefix) {
-          createExec.set(`Executable File_${cleanName}`, entry.value);
-          copiedAny = true;
-        } else if (kLower.startsWith(basePrefix + ' ')) {
-          const suffix = entry.key.slice(baseKey.length);
-          createExec.set(`Executable File_${cleanName}${suffix}`, entry.value);
-          copiedAny = true;
+      if (baseConfigName) {
+        const baseKey = `Executable File_${configSuffix(baseConfigName)}`;
+        const basePrefix = baseKey.toLowerCase();
+        for (const entry of [...createExec.entries()]) {
+          const kLower = entry.key.toLowerCase();
+          if (kLower === basePrefix) {
+            createExec.set(`Executable File_${cleanName}`, entry.value);
+            copiedAny = true;
+          } else if (kLower.startsWith(basePrefix + ' ')) {
+            const suffix = entry.key.slice(baseKey.length);
+            createExec.set(`Executable File_${cleanName}${suffix}`, entry.value);
+            copiedAny = true;
+          }
         }
       }
       if (!copiedAny) {
-        const dbgKey = 'Executable File_Debug';
-        const dbgVal = createExec.get(dbgKey);
-        if (dbgVal) {
-          createExec.set(`Executable File_${cleanName} Is Rel`, createExec.get(`${dbgKey} Is Rel`) ?? 'True');
-          createExec.set(`Executable File_${cleanName} Rel To`, createExec.get(`${dbgKey} Rel To`) ?? '"Project"');
-          createExec.set(`Executable File_${cleanName} Rel Path`, createExec.get(`${dbgKey} Rel Path`) ?? `"${path.basename(projectPath, path.extname(projectPath))}.exe"`);
-          createExec.set(`Executable File_${cleanName}`, dbgVal);
-        } else {
-          const exeName = `${path.basename(projectPath, path.extname(projectPath))}.exe`;
-          createExec.set(`Executable File_${cleanName} Is Rel`, 'True');
-          createExec.set(`Executable File_${cleanName} Rel To`, '"Project"');
-          createExec.set(`Executable File_${cleanName} Rel Path`, quote(exeName));
-          createExec.set(`Executable File_${cleanName}`, quote(toCviPath(path.join(path.dirname(projectPath), exeName))));
-        }
+        createExec.set(`Executable File_${cleanName} Is Rel`, 'True');
+        createExec.set(`Executable File_${cleanName} Rel To`, quote('Project'));
+        createExec.set(`Executable File_${cleanName} Rel Path`, quote(defaultOutputFileName));
+        createExec.set(`Executable File_${cleanName}`, quote(toCviPath(path.join(path.dirname(projectPath), defaultOutputFileName))));
       }
     }
 
