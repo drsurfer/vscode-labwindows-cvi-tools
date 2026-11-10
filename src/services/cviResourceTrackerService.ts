@@ -178,13 +178,13 @@ export class CviResourceTrackerService implements vscode.Disposable {
                 if (reason === 'exception' && typeof message.body?.description === 'string' && message.body.description.includes('breakpoint')) {
                   message.body.description = 'LabWindows/CVI Run-Time Check Error: variable uninitialized, array bounds, or assertion check failed.';
                 }
-                this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
 
                 // Highlight offending source line if stopped at CVI runtime error
                 void this.highlightErrorLineFromSession(session, message.body?.threadId ?? 1);
 
-                const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', true);
+                const autoRefresh = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('resourceTracking.autoRefreshOnBreakpoint', false);
                 if (autoRefresh) {
+                  this.output.appendLine(`[CVI Resources] Target stopped (reason: ${reason}). Querying live resources...`);
                   void this.refreshFromSession(session);
                 }
               }
@@ -205,6 +205,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
     }
 
     this.isRefreshing = true;
+    let schedulerLockingEnabled = false;
+
     try {
       if (!this.dumpFilePath) {
         this.dumpFilePath = path.join(os.tmpdir(), 'cvi_res_dump.txt');
@@ -222,7 +224,16 @@ export class CviResourceTrackerService implements vscode.Disposable {
 
       const normalizedDumpPath = this.dumpFilePath.replace(/\\/g, '/');
 
-      // 1. Prepare raw buffer via VirtualAlloc to bypass CVI CRT malloc tracking entirely!
+      // 1. Lock scheduler to the current stopped thread to prevent other threads from running,
+      // hitting breakpoints, or causing thread collisions during inferior call evaluation!
+      try {
+        await targetSession.customRequest('evaluate', { expression: '-exec set scheduler-locking on', context: 'repl' });
+        schedulerLockingEnabled = true;
+      } catch {
+        // ignore
+      }
+
+      // 2. Prepare raw buffer via VirtualAlloc to bypass CVI CRT malloc tracking entirely
       const strLen = normalizedDumpPath.length + 1;
       const prepareCommands = [
         '-exec call (void)__SetCurrentDebuggingLevel(3)',
@@ -238,33 +249,30 @@ export class CviResourceTrackerService implements vscode.Disposable {
         }
       }
 
-      // 2. Invoke __CVI_Resource_DumpToFile using $cvi_buf (no string literal -> zero CRT mallocs!)
-      const dumpCommands = [
-        '-exec call (int)__CVI_Resource_DumpToFile($cvi_buf)',
-        '-exec p (int)__CVI_Resource_DumpToFile($cvi_buf)',
-        `-exec call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`,
-        `call (int)__CVI_Resource_DumpToFile("${normalizedDumpPath}")`
-      ];
-
+      // 3. Invoke __CVI_Resource_DumpToFile using $cvi_buf (NEVER pass string literal to avoid inferior malloc!)
       let dumpSuccess = false;
-      for (const cmd of dumpCommands) {
-        try {
-          const res = await targetSession.customRequest('evaluate', { expression: cmd, context: 'repl' });
-          this.output.appendLine(`[CVI Resources] Sent: ${cmd} -> Result: ${JSON.stringify(res)}`);
+      try {
+        const res = await targetSession.customRequest('evaluate', {
+          expression: '-exec call (int)__CVI_Resource_DumpToFile($cvi_buf)',
+          context: 'repl'
+        });
+        const resStr = typeof res?.result === 'string' ? res.result : JSON.stringify(res);
+        this.output.appendLine(`[CVI Resources] Sent: -exec call (int)__CVI_Resource_DumpToFile($cvi_buf) -> Result: ${resStr}`);
 
-          if (fs.existsSync(this.dumpFilePath)) {
-            const stat = fs.statSync(this.dumpFilePath);
-            this.output.appendLine(`[CVI Resources] Dump file generated: ${this.dumpFilePath} (${stat.size} bytes).`);
-            dumpSuccess = true;
-            break;
-          }
-        } catch (err: any) {
-          const msg = err?.message || String(err);
-          this.output.appendLine(`[CVI Resources] Command '${cmd}' failed: ${msg}`);
+        // Check if GDB reported an error or abandoned execution
+        if (/abandoned|stopped in another thread|Critical error|SIGTRAP|exception|0xc0000374/i.test(resStr)) {
+          this.output.appendLine('[CVI Resources] ⚠️ Live resource query was safely abandoned by GDB to protect process memory.');
+        } else if (fs.existsSync(this.dumpFilePath)) {
+          const stat = fs.statSync(this.dumpFilePath);
+          this.output.appendLine(`[CVI Resources] Dump file generated: ${this.dumpFilePath} (${stat.size} bytes).`);
+          dumpSuccess = true;
         }
+      } catch (err: any) {
+        const msg = err?.message || String(err);
+        this.output.appendLine(`[CVI Resources] Dump command failed: ${msg}`);
       }
 
-      // 3. Read dump file if generated
+      // 4. Read dump file if generated
       if (dumpSuccess && fs.existsSync(this.dumpFilePath)) {
         const content = fs.readFileSync(this.dumpFilePath, 'utf8');
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -296,15 +304,19 @@ export class CviResourceTrackerService implements vscode.Disposable {
         parsed.isActiveSession = true;
         this.currentSnapshot = parsed;
         this.output.appendLine(`[CVI Resources] Parsed ${parsed.items.length} active resource allocations (${formatBytes(parsed.totalBytes)}).`);
-      } else {
-        this.output.appendLine('[CVI Resources] No dump file was produced by CVI runtime. Verify that:');
-        this.output.appendLine('  1. Project Build Mode is set to Debug64 or Debug.');
-        this.output.appendLine('  2. Debugging Level is set to Extended.');
-        this.output.appendLine('  3. In code, SetEnableResourceTracking(1) is called (from <utility.h>).');
+      } else if (!dumpSuccess) {
+        this.output.appendLine('[CVI Resources] Note: Live resource snapshot not generated (inferior call skipped or unavailable). Full leak analysis is performed upon program exit.');
       }
     } catch (error) {
       this.output.appendLine(`[CVI Resources] Error querying resource tracker: ${error}`);
     } finally {
+      if (schedulerLockingEnabled && targetSession) {
+        try {
+          await targetSession.customRequest('evaluate', { expression: '-exec set scheduler-locking step', context: 'repl' });
+        } catch {
+          // ignore
+        }
+      }
       this.isRefreshing = false;
       this._onDidChangeData.fire();
     }

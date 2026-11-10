@@ -1989,8 +1989,8 @@
         },
         "labwindowsCvi.resourceTracking.autoRefreshOnBreakpoint": {
           "type": "boolean",
-          "default": true,
-          "description": "Automatically query and update CVI resource tracking when paused at a breakpoint."
+          "default": false,
+          "description": "Automatically query and update CVI resource tracking when paused at a breakpoint. Disabled by default to prevent inferior-call thread collisions in multi-threaded programs (manual Refresh remains available)."
         },
         "labwindowsCvi.debug.breakOnRuntimeErrors": {
           "type": "boolean",
