@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -73,6 +73,13 @@
           "id": "labwindowsCvi.resourceTracking",
           "name": "CVI Resource Tracking",
           "contextualTitle": "LabWindows/CVI Resources",
+          "icon": "media/cvi-tools.svg",
+          "showCollapseAll": true
+        },
+        {
+          "id": "labwindowsCvi.processThreads",
+          "name": "CVI Process Threads",
+          "contextualTitle": "LabWindows/CVI Process Threads",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
@@ -767,6 +774,24 @@
         "category": "LabWindows/CVI"
       },
       {
+        "command": "labwindowsCvi.manageConfigurations",
+        "title": "LabWindows/CVI: Manage Configurations...",
+        "icon": "$(tools)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.refreshProcessThreads",
+        "title": "Refresh Process Threads",
+        "icon": "$(refresh)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.pauseAllThreads",
+        "title": "Pause Process Threads",
+        "icon": "$(debug-pause)",
+        "category": "LabWindows/CVI"
+      },
+      {
         "command": "labwindowsCvi.openRecent",
         "title": "LabWindows/CVI: Open Recent Workspace or Project...",
         "icon": "$(history)"
@@ -1003,6 +1028,16 @@
           "command": "labwindowsCvi.clearResourceTracking",
           "when": "view == labwindowsCvi.resourceTracking",
           "group": "navigation@3"
+        },
+        {
+          "command": "labwindowsCvi.refreshProcessThreads",
+          "when": "view == labwindowsCvi.processThreads",
+          "group": "navigation@1"
+        },
+        {
+          "command": "labwindowsCvi.pauseAllThreads",
+          "when": "view == labwindowsCvi.processThreads",
+          "group": "navigation@2"
         },
         {
           "command": "labwindowsCvi.openRecent",
@@ -1787,6 +1822,13 @@
           "type": "string",
           "default": "",
           "description": "Optional CVI custom build configuration name passed through -config=..."
+        },
+        "labwindowsCvi.numberOfConcurrentCompiles": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 32,
+          "description": "Specifies the number of concurrent compiler worker processes to spawn during project builds. Set to 0 to automatically utilize all logical CPU cores."
         },
         "labwindowsCvi.extraCompilerArguments": {
           "type": "array",

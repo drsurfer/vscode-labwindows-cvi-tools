@@ -40,6 +40,7 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
     private readonly projectSettings: CviProjectSettingsService
   ) {
     this.disposables.push(this.workspaces.onDidChange(() => this.update()));
+    this.disposables.push(this.builds.onDidChangeBuilding(() => this.update()));
   }
 
   update(): void {
@@ -79,7 +80,11 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
     if (!summary) {
       return [];
     }
-    return [
+    const items: QuickActionNode[] = [];
+    if (this.builds.isBuilding) {
+      items.push(action('Build in progress…', 'labwindowsCvi.showFullBuildTrace', 'sync~spin', 'Compiling target…', 'Click to view build trace'));
+    }
+    items.push(
       action(summary.projectName, 'labwindowsCvi.openProjectFile', 'project', `${summary.workspaceName} · ${summary.projectCount} project${summary.projectCount === 1 ? '' : 's'}`, 'Click to open project file (.prj)'),
       action('Target type', 'labwindowsCvi.selectTargetType', 'symbol-enum', summary.targetType, 'Click to switch CVI target type (Executable, DLL, Static Library)'),
       action('Build mode', 'labwindowsCvi.selectBuildMode', 'settings-gear', modeDescription(summary.buildMode), 'Click to switch build mode (Debug/Release, x86/x64)'),
@@ -93,7 +98,8 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
       action('Build options…', 'labwindowsCvi.editBuildOptions', 'tools'),
       action('Run options…', 'labwindowsCvi.chooseRunAction', 'list-selection'),
       action('Debug in VS Code', 'labwindowsCvi.debugWithVsCode', 'debug')
-    ];
+    );
+    return items;
   }
 
   async editCommandLine(): Promise<void> {

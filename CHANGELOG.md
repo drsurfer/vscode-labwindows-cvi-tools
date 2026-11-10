@@ -2,6 +2,50 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.17] - 2026-11-10
+
+### Added
+- **Build In-Progress Activity Indicator**:
+  - Added real-time visual progress feedback during build, rebuild, clean, and batch compilation operations.
+  - Status bar item dynamically transforms into an animated spinner (`$(sync~spin) Building...`) while compiling.
+  - Integrated `vscode.window.withProgress` notification banners showing project compilation progress.
+  - Project items in the Workspace Explorer and CVI Actions views display animated busy status indicators during builds.
+  - Added build concurrency guards to safely prevent conflicting overlapping compilation jobs.
+- **Complete Build Options Coverage**:
+  - Implemented full parser and UI coverage for native CVI build and compiler options:
+    - Number of concurrent compiles (`labwindowsCvi.numberOfConcurrentCompiles` setting and project build option).
+    - Function prototypes requirement (`Require Prototypes`).
+    - Non-void function return values requirement (`Require Return Values`).
+    - Compiler-level uninitialized local variables check (`None`, `Conservative`, `Aggressive`).
+    - Quick compiler warning toggles: Unreferenced identifiers, Pointer type mismatch, Unreachable code, and Assignment in conditional.
+- **Process Threads Visualization During Debugging**:
+  - Added dedicated **CVI Process Threads** tree view (`labwindowsCvi.processThreads`) in the Run & Debug sidebar container.
+  - Real-time thread inspection via Debug Adapter Protocol (DAP) during debugging sessions (`cppdbg` / `cvi`).
+  - Automatic thread classification: Main GUI Thread, CVI Thread Pool Worker (`CmtScheduleThreadPoolFunction`), Worker Thread, and CVI Runtime Internal.
+  - Expandable thread nodes displaying call stack frames with click-to-open source code navigation.
+  - Process diagnostics summary with active thread counts and live CPU utilization percentage sampling.
+  - View toolbar actions for manual refresh (`$(refresh)`) and pausing all threads (`$(debug-pause)`).
+- **Custom Build Configurations Management ("Manage Configurations")**:
+  - Full support for user-defined build configurations beyond the four standard targets (`Debug`, `Release`, `Debug64`, `Release64`).
+  - Added `labwindowsCvi.manageConfigurations` command mirroring the native LabWindows/CVI dialog:
+    - Create new custom configurations inheriting compiler & linker settings from any existing configuration.
+    - Duplicate existing build configurations.
+    - Rename custom build configurations.
+    - Delete custom configurations from `.prj` files.
+    - Switch active build configuration.
+  - Enhanced `labwindowsCvi.selectBuildMode` and the status bar mode item to display and activate custom configurations.
+  - Seamless compiler integration: passing `-config=<Name>` to `compile.exe` when building a custom configuration.
+
+### Changed
+- **Auto-Save on Change in Settings Webviews**:
+  - Replaced manual "Save" buttons in Project Target Settings and Build Options panels with automatic saving on input/change/blur.
+  - Text inputs are debounced (350ms) to ensure smooth typing while checkboxes and selectors save immediately.
+  - Added real-time save status badge indicator (`Saved` / `Saving...`) in the header.
+
+### Removed
+- **Redundant "Open in CVI" Action Buttons**:
+  - Removed "Open in CVI" buttons from the CVI Home panel and the Build Settings panel header and Overview card. (The command remains available via the Command Palette).
+
 ## [0.0.16] - 2026-11-09
 
 ### Added

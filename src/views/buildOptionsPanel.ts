@@ -8,7 +8,7 @@ import { CviWorkspaceService } from '../services/cviWorkspaceService';
 import { CviCppToolsService } from '../services/cviCppToolsService';
 import { normalizeRuntimePath } from '../utils/pathUtils';
 
-type BuildOptionsScope = CviBuildMode | 'all';
+type BuildOptionsScope = CviBuildMode | 'all' | string;
 
 const ALL_BUILD_MODES: CviBuildMode[] = ['debug', 'release', 'debug64', 'release64'];
 
@@ -102,7 +102,7 @@ export class BuildOptionsPanel implements vscode.Disposable {
     return vscode.workspace.getConfiguration('labwindowsCvi').get<CviBuildMode>('buildMode', 'debug');
   }
 
-  private representativeMode(scope: BuildOptionsScope): CviBuildMode {
+  private representativeMode(scope: BuildOptionsScope): CviBuildMode | string {
     return scope === 'all' ? this.buildMode : scope;
   }
 
@@ -133,16 +133,19 @@ export class BuildOptionsPanel implements vscode.Disposable {
     if (message.command === 'save') {
       try {
         const payload: CviBuildOptions = message.options;
-        const modes = this.selectedScope === 'all' ? ALL_BUILD_MODES : [this.selectedScope];
+        const customConfigs = this.parser.getCustomConfigurations(ref.absolutePath, workspacePath);
+        const modes: Array<CviBuildMode | string> =
+          this.selectedScope === 'all'
+            ? [...ALL_BUILD_MODES, ...customConfigs.map((c) => `custom:${c.name}`)]
+            : [this.selectedScope];
         for (const mode of modes) {
           this.parser.setNativeBuildOptions(ref.absolutePath, workspacePath, mode, payload);
         }
         this.cppTools?.requestSync(this.workspaces.currentWorkspace);
-        vscode.window.showInformationMessage(`CVI Build Options saved for ${ref.name} (${scopeLabel(this.selectedScope)}).`);
-        this.update();
+        this.panel?.webview.postMessage({ command: 'saved' });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Unable to save CVI Build Options: ${msg}`);
+        this.panel?.webview.postMessage({ command: 'saveError', error: msg });
       }
     }
   }
@@ -152,7 +155,8 @@ export class BuildOptionsPanel implements vscode.Disposable {
     const mode = this.representativeMode(scope);
     const workspacePath = this.workspaces.currentWorkspace?.path;
     const options = this.parser.getNativeBuildOptions(ref.absolutePath, workspacePath, mode);
-    const is64 = mode.endsWith('64');
+    const customConfigs = this.parser.getCustomConfigurations(ref.absolutePath, workspacePath);
+    const is64 = mode.endsWith('64') || (typeof mode === 'string' && mode.startsWith('custom:') && (customConfigs.find(c => `custom:${c.name}` === mode)?.is64Bit ?? false));
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -180,7 +184,7 @@ export class BuildOptionsPanel implements vscode.Disposable {
       color: var(--fg);
       font-family: var(--font);
       font-size: 13px;
-      padding: 20px 24px 80px;
+      padding: 20px 24px 30px;
     }
     header {
       margin-bottom: 20px;
@@ -193,6 +197,13 @@ export class BuildOptionsPanel implements vscode.Disposable {
       padding-bottom: 14px;
     }
     h1 { font-size: 18px; font-weight: 600; }
+    .save-status {
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
     .scope-selector {
       display: flex;
       align-items: center;
@@ -277,19 +288,6 @@ export class BuildOptionsPanel implements vscode.Disposable {
     .btn-secondary {
       background-color: var(--btn-sec-bg);
       color: var(--btn-sec-fg);
-    }
-    .actions-bar {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: var(--card-bg);
-      border-top: 1px solid var(--border);
-      padding: 12px 24px;
-      display: flex;
-      justify-content: flex-end;
-      gap: 12px;
-      z-index: 100;
     }
     .warning-summary {
       display: flex;
@@ -397,15 +395,22 @@ export class BuildOptionsPanel implements vscode.Disposable {
       <h1>CVI Build Options</h1>
       <span style="color:var(--vscode-descriptionForeground); font-size:12px;">Project: ${escapeHtml(ref.name)}</span>
     </div>
-    <div class="scope-selector">
-      <label for="scopeSelect"><strong>Configuration:</strong></label>
-      <select id="scopeSelect" onchange="changeScope(this.value)">
-        <option value="debug" ${scope === 'debug' ? 'selected' : ''}>Debug (x86)</option>
-        <option value="release" ${scope === 'release' ? 'selected' : ''}>Release (x86)</option>
-        <option value="debug64" ${scope === 'debug64' ? 'selected' : ''}>Debug (x64)</option>
-        <option value="release64" ${scope === 'release64' ? 'selected' : ''}>Release (x64)</option>
-        <option value="all" ${scope === 'all' ? 'selected' : ''}>All configurations</option>
-      </select>
+    <div style="display:flex; align-items:center; gap:16px;">
+      <span id="saveStatus" class="save-status">
+        <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background-color:#4ec9b0;"></span>
+        Saved
+      </span>
+      <div class="scope-selector">
+        <label for="scopeSelect"><strong>Configuration:</strong></label>
+        <select id="scopeSelect" onchange="changeScope(this.value)">
+          <option value="debug" ${scope === 'debug' ? 'selected' : ''}>Debug (x86)</option>
+          <option value="release" ${scope === 'release' ? 'selected' : ''}>Release (x86)</option>
+          <option value="debug64" ${scope === 'debug64' ? 'selected' : ''}>Debug (x64)</option>
+          <option value="release64" ${scope === 'release64' ? 'selected' : ''}>Release (x64)</option>
+          ${customConfigs.map((c) => `<option value="custom:${escapeHtml(c.name)}" ${scope === `custom:${c.name}` ? 'selected' : ''}>${escapeHtml(c.name)} (${c.is64Bit ? 'x64' : 'x86'} ${c.isRelease ? 'Release' : 'Debug'})</option>`).join('')}
+          <option value="all" ${scope === 'all' ? 'selected' : ''}>All configurations</option>
+        </select>
+      </div>
     </div>
   </header>
 
@@ -446,9 +451,9 @@ export class BuildOptionsPanel implements vscode.Disposable {
       </div>
     </div>
 
-    <!-- DEBUGGING OPTIONS -->
+    <!-- DEBUGGING & STRICTNESS OPTIONS -->
     <div class="card">
-      <div class="card-title">Debugging Options</div>
+      <div class="card-title">Debugging & Strictness</div>
       <div class="form-group">
         <label for="debuggingLevel">Debugging level:</label>
         <select id="debuggingLevel">
@@ -460,7 +465,25 @@ export class BuildOptionsPanel implements vscode.Disposable {
         <span>Detect uninitialized local variables at run time</span>
       </label>
 
-      <div class="card-title" style="margin-top:20px;">C Language Options</div>
+      <div class="card-title" style="margin-top:20px;">C Language Strictness</div>
+      <label class="checkbox-group">
+        <input type="checkbox" id="requirePrototypes" ${options.requirePrototypes ? 'checked' : ''} />
+        <span>Require function prototypes</span>
+      </label>
+      <label class="checkbox-group">
+        <input type="checkbox" id="requireReturnValues" ${options.requireReturnValues ? 'checked' : ''} />
+        <span>Require return values for non-void functions</span>
+      </label>
+      <div class="form-group" style="margin-top:6px;">
+        <label for="uninitializedLocalsCompile">Uninitialized locals check (compiler):</label>
+        <select id="uninitializedLocalsCompile">
+          <option value="None" ${options.uninitializedLocalsCompile === 'None' ? 'selected' : ''}>None (Disabled)</option>
+          <option value="Conservative" ${options.uninitializedLocalsCompile === 'Conservative' ? 'selected' : ''}>Conservative</option>
+          <option value="Aggressive" ${options.uninitializedLocalsCompile === 'Aggressive' ? 'selected' : ''}>Aggressive (Default)</option>
+        </select>
+      </div>
+
+      <div class="card-title" style="margin-top:20px;">Language Extensions</div>
       <label class="checkbox-group">
         <input type="checkbox" id="enableC99" ${options.enableC99 ? 'checked' : ''} />
         <span>Build with C99 extensions</span>
@@ -478,6 +501,16 @@ export class BuildOptionsPanel implements vscode.Disposable {
       <div class="form-group" style="display:flex; flex-direction:row; gap:8px;">
         <input type="text" id="precompiledFile" style="flex:1;" value="${escapeHtml(options.precompiledIncludeFile)}" placeholder="e.g. stdafx.h or my_header.h" />
         <button class="btn btn-secondary" type="button" onclick="browsePrecompiled()">Browse...</button>
+      </div>
+    </div>
+
+    <!-- BUILD PROCESS & CONCURRENCY -->
+    <div class="card" style="grid-column: 1 / -1;">
+      <div class="card-title">Build Process & Multi-Threading</div>
+      <div class="form-group">
+        <label for="concurrentCompiles">Number of concurrent compiles:</label>
+        <input type="number" id="concurrentCompiles" min="0" max="32" value="${options.concurrentCompiles ?? 0}" style="max-width:200px;" />
+        <span style="font-size:11px; color:var(--vscode-descriptionForeground);">0 = Automatic (utilizes all logical CPU cores). Set a value between 1 and 32 to cap concurrent compiler processes during builds.</span>
       </div>
     </div>
 
@@ -509,6 +542,25 @@ export class BuildOptionsPanel implements vscode.Disposable {
         </button>
       </div>
 
+      <div style="margin-top:14px; border-top:1px solid rgba(255,255,255,0.06); padding-top:12px; display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:8px;">
+        <label class="checkbox-group" style="margin-bottom:0;">
+          <input type="checkbox" id="enableUnreferencedIdentifiers" ${options.enableUnreferencedIdentifiersWarning ? 'checked' : ''} />
+          <span>Unreferenced identifiers</span>
+        </label>
+        <label class="checkbox-group" style="margin-bottom:0;">
+          <input type="checkbox" id="enablePointerMismatch" ${options.enablePointerMismatchWarning ? 'checked' : ''} />
+          <span>Pointer type mismatch</span>
+        </label>
+        <label class="checkbox-group" style="margin-bottom:0;">
+          <input type="checkbox" id="enableUnreachableCode" ${options.enableUnreachableCodeWarning ? 'checked' : ''} />
+          <span>Unreachable code</span>
+        </label>
+        <label class="checkbox-group" style="margin-bottom:0;">
+          <input type="checkbox" id="enableAssignmentInConditional" ${options.enableAssignmentInConditionalWarning ? 'checked' : ''} />
+          <span>Assignment in conditional</span>
+        </label>
+      </div>
+
       <div class="warning-summary">
         <div>
           <span>Status: </span>
@@ -520,11 +572,6 @@ export class BuildOptionsPanel implements vscode.Disposable {
         </label>
       </div>
     </div>
-  </div>
-
-  <div class="actions-bar">
-    <button class="btn btn-secondary" onclick="revert()">Revert</button>
-    <button class="btn" onclick="save()">Save Build Options</button>
   </div>
 
   <!-- COMPILER WARNINGS MODAL -->
@@ -607,6 +654,22 @@ export class BuildOptionsPanel implements vscode.Disposable {
     let disabledWarningIds = new Set(${JSON.stringify(options.disabledWarningIds)});
     let errorWarningIds = new Set(${JSON.stringify(options.errorWarningIds)});
     let selectedWarningId = null;
+    let autoSaveTimer = null;
+
+    function setSaveStatus(text, color) {
+      const el = document.getElementById('saveStatus');
+      if (el) {
+        el.innerHTML = \`<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background-color:\${color};"></span> \${text}\`;
+      }
+    }
+
+    function triggerAutoSave(delay = 350) {
+      setSaveStatus('Saving...', '#cca700');
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => {
+        save();
+      }, delay);
+    }
 
     function escapeHtml(str) {
       return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -624,6 +687,11 @@ export class BuildOptionsPanel implements vscode.Disposable {
       const msg = event.data;
       if (msg.command === 'setPrecompiledFile') {
         document.getElementById('precompiledFile').value = msg.path;
+        triggerAutoSave(50);
+      } else if (msg.command === 'saved') {
+        setSaveStatus('Saved', '#4ec9b0');
+      } else if (msg.command === 'saveError') {
+        setSaveStatus('Save error', '#f44336');
       }
     });
 
@@ -702,20 +770,20 @@ export class BuildOptionsPanel implements vscode.Disposable {
       if (activeByDefault) {
         if (checked) disabledWarningIds.delete(id);
         else disabledWarningIds.add(id);
-      } else {
-        // If inactive by default and checked, cannot simply disable: warning stays inactive unless level is changed
       }
       renderWarningTable();
+      triggerAutoSave(150);
     }
 
     function toggleWarningError(id, checked) {
       if (checked) {
         errorWarningIds.add(id);
-        disabledWarningIds.delete(id); // an error is active
+        disabledWarningIds.delete(id);
       } else {
         errorWarningIds.delete(id);
       }
       renderWarningTable();
+      triggerAutoSave(150);
     }
 
     function onWarningLevelChange(newLevel) {
@@ -723,12 +791,14 @@ export class BuildOptionsPanel implements vscode.Disposable {
       disabledWarningIds.clear();
       errorWarningIds.clear();
       renderWarningTable();
+      triggerAutoSave(150);
     }
 
     function restoreWarningDefaults() {
       disabledWarningIds.clear();
       errorWarningIds.clear();
       renderWarningTable();
+      triggerAutoSave(150);
     }
 
     function filterWarnings() {
@@ -754,10 +824,6 @@ export class BuildOptionsPanel implements vscode.Disposable {
       document.getElementById('macrosModal').style.display = 'none';
     }
 
-    function revert() {
-      window.location.reload();
-    }
-
     function save() {
       const payload = {
         callingConvention: document.getElementById('callingConvention').value,
@@ -776,11 +842,29 @@ export class BuildOptionsPanel implements vscode.Disposable {
         compileWithPrecompiledInclude: document.getElementById('compileWithPrecompiled').checked,
         precompiledIncludeFile: document.getElementById('precompiledFile').value.trim(),
         disabledWarningIds: Array.from(disabledWarningIds),
-        errorWarningIds: Array.from(errorWarningIds)
+        errorWarningIds: Array.from(errorWarningIds),
+        requirePrototypes: document.getElementById('requirePrototypes').checked,
+        requireReturnValues: document.getElementById('requireReturnValues').checked,
+        uninitializedLocalsCompile: document.getElementById('uninitializedLocalsCompile').value,
+        enableUnreferencedIdentifiersWarning: document.getElementById('enableUnreferencedIdentifiers').checked,
+        enablePointerMismatchWarning: document.getElementById('enablePointerMismatch').checked,
+        enableUnreachableCodeWarning: document.getElementById('enableUnreachableCode').checked,
+        enableAssignmentInConditionalWarning: document.getElementById('enableAssignmentInConditional').checked,
+        concurrentCompiles: Number(document.getElementById('concurrentCompiles').value) || 0
       };
 
       vscode.postMessage({ command: 'save', options: payload });
     }
+
+    document.querySelectorAll('input, select, textarea').forEach(el => {
+      if (el.id === 'scopeSelect' || el.id === 'warningSearch' || el.id === 'warningFilterLevel') return;
+      if (el.type === 'checkbox' || el.tagName === 'SELECT') {
+        el.addEventListener('change', () => triggerAutoSave(50));
+      } else {
+        el.addEventListener('input', () => triggerAutoSave(350));
+        el.addEventListener('change', () => triggerAutoSave(50));
+      }
+    });
 
     updateSummary();
   </script>
@@ -798,12 +882,16 @@ function escapeJs(text: string): string {
 }
 
 function scopeLabel(scope: BuildOptionsScope): string {
+  if (scope.startsWith('custom:')) {
+    return scope.substring(7);
+  }
   switch (scope) {
     case 'debug': return 'Debug (x86)';
     case 'release': return 'Release (x86)';
     case 'debug64': return 'Debug (x64)';
     case 'release64': return 'Release (x64)';
     case 'all': return 'All build configurations';
+    default: return scope;
   }
 }
 

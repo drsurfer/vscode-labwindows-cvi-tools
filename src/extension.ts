@@ -24,6 +24,9 @@ import { CviGdbDebugService } from './services/cviGdbDebugService';
 import { CviDebugConfigurationProvider } from './providers/cviDebugConfigurationProvider';
 import { CviResourceTrackerService } from './services/cviResourceTrackerService';
 import { CviResourceTreeProvider } from './providers/cviResourceTreeProvider';
+import { CviThreadTrackerService } from './services/cviThreadTrackerService';
+import { CviThreadTreeProvider } from './providers/cviThreadTreeProvider';
+import { CviConfigurationService } from './services/cviConfigurationService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const output = vscode.window.createOutputChannel('LabWindows/CVI');
@@ -40,7 +43,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const encodingService = new CviEncodingService(workspaces, output);
   const gdbService = new CviGdbDebugService(context, output, buildTraceOutput);
   const builds = new CviBuildService(parser, workspaces, installations, projectSettings, gdbService, output, buildTraceOutput, buildDiagnostics);
-  const treeProvider = new CviTreeProvider(workspaces);
+  const treeProvider = new CviTreeProvider(workspaces, builds);
   const treeView = vscode.window.createTreeView('labwindowsCvi.workspaceExplorer', { treeDataProvider: treeProvider, dragAndDropController: treeProvider, showCollapseAll: true, canSelectMany: true });
   const symbols = new CviSymbolService(context.extensionPath, workspaces);
   const fileSymbolsProvider = new CviFileSymbolsProvider(symbols);
@@ -98,6 +101,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const resourceTracker = new CviResourceTrackerService(output);
   const resourceTreeProvider = new CviResourceTreeProvider(resourceTracker);
   const resourceTreeView = vscode.window.createTreeView('labwindowsCvi.resourceTracking', { treeDataProvider: resourceTreeProvider, showCollapseAll: true });
+  const configService = new CviConfigurationService(workspaces, parser);
+  const threadTracker = new CviThreadTrackerService(output);
+  const threadTreeProvider = new CviThreadTreeProvider(threadTracker);
+  const threadTreeView = vscode.window.createTreeView('labwindowsCvi.processThreads', { treeDataProvider: threadTreeProvider, showCollapseAll: true });
 
   const statusBarItems = [
     createStatusBarAction('$(home)', 'LabWindows/CVI home', 'labwindowsCvi.openHome', 99),
@@ -120,10 +127,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const updateStatusBar = (): void => {
     const targetType = workspaces.activeProject?.targetType;
-    const modeText = builds.buildMode === 'debug64' ? 'D64' : builds.buildMode === 'release64' ? 'R64' : builds.buildMode === 'release' ? 'R32' : 'D32';
+    const customConfig = vscode.workspace.getConfiguration('labwindowsCvi').get<string>('customBuildConfiguration', '').trim();
+    const baseModeText = builds.buildMode === 'debug64' ? 'D64' : builds.buildMode === 'release64' ? 'R64' : builds.buildMode === 'release' ? 'R32' : 'D32';
+    const modeText = customConfig ? (customConfig.length > 7 ? customConfig.slice(0, 6) + '…' : customConfig) : baseModeText;
     const targetText = targetType === 'Dynamic Link Library' ? 'DLL' : targetType === 'Static Library' ? 'LIB' : targetType === 'Executable' ? 'EXE' : '---';
+
+    if (builds.isBuilding) {
+      statusBarItems[2].text = '$(sync~spin) Building…';
+      statusBarItems[2].tooltip = 'LabWindows/CVI build in progress. Click to view build trace.';
+      statusBarItems[2].command = 'labwindowsCvi.showFullBuildTrace';
+    } else {
+      statusBarItems[2].text = '$(tools)';
+      statusBarItems[2].tooltip = 'Build / rebuild / clean the active CVI project';
+      statusBarItems[2].command = 'labwindowsCvi.chooseBuildAction';
+    }
+
     statusBarItems[6].text = modeText;
-    statusBarItems[6].tooltip = `LabWindows/CVI build mode: ${modeText}. Click to change.`;
+    statusBarItems[6].tooltip = customConfig
+      ? `LabWindows/CVI custom build configuration: ${customConfig} (base: ${baseModeText}). Click to change.`
+      : `LabWindows/CVI build mode: ${modeText}. Click to change.`;
     statusBarItems[7].text = targetText;
     statusBarItems[7].tooltip = `LabWindows/CVI target type: ${targetText}. Click to change.`;
     const show = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('showPersistentStatusBarActions', true);
@@ -187,6 +209,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void cppTools.ensureConfigurationRootInWorkspace(workspaces.currentWorkspace).finally(() => {
         cppTools.requestSync(workspaces.currentWorkspace);
       });
+    }),
+    builds.onDidChangeBuilding(() => {
+      updateStatusBar();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('labwindowsCvi')) {
@@ -468,6 +493,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.refreshResourceTracking', () => resourceTreeProvider.refresh()),
     register('labwindowsCvi.clearResourceTracking', () => resourceTracker.clear()),
     register('labwindowsCvi.exportResourceReport', () => resourceTracker.exportReport()),
+    register('labwindowsCvi.manageConfigurations', () => configService.manageConfigurations()),
+    register('labwindowsCvi.refreshProcessThreads', () => threadTreeProvider.refresh()),
+    register('labwindowsCvi.pauseAllThreads', () => threadTracker.pauseAllThreads()),
     register('labwindowsCvi.openResourceLocation', async (arg?: { file?: string; line?: number }) => {
       if (!arg?.file) return;
       try {
@@ -485,7 +513,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider('cvi', debugConfigProvider),
     resourceTracker,
-    resourceTreeView
+    resourceTreeView,
+    threadTracker,
+    threadTreeProvider,
+    threadTreeView
   );
 
   ensureBundledCviLibraryPack(context, output);

@@ -7,7 +7,7 @@ import { CviProjectBuildSettings, CviProjectSettingsService } from '../services/
 import { CviWorkspaceService } from '../services/cviWorkspaceService';
 import { normalizeRuntimePath } from '../utils/pathUtils';
 
-type BuildSettingsScope = CviBuildMode | 'all';
+type BuildSettingsScope = CviBuildMode | 'all' | string;
 
 const ALL_BUILD_MODES: CviBuildMode[] = ['debug', 'release', 'debug64', 'release64'];
 
@@ -132,7 +132,7 @@ export class BuildSettingsPanel implements vscode.Disposable {
     }
     if (message?.type === 'save') {
       try {
-        const scope = parseScope(message.scope, this.selectedScope);
+        const scope = message.scope ? String(message.scope) : this.selectedScope;
         this.selectedScope = scope;
         const settings = message.settings as CviProjectBuildSettings;
         const targetSettings = message.nativeTarget as CviNativeTargetSettings;
@@ -146,8 +146,7 @@ export class BuildSettingsPanel implements vscode.Disposable {
           await vscode.workspace.getConfiguration('labwindowsCvi').update('buildLogDetail', detail, vscode.ConfigurationTarget.Workspace);
         }
         this.workspaces.refresh();
-        vscode.window.showInformationMessage(`Build settings saved for ${this.projectRef.name} (${scopeLabel(scope)}).`);
-        this.update();
+        void this.panel?.webview.postMessage({ type: 'saved' });
       } catch (error) {
         vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
       }
@@ -156,14 +155,29 @@ export class BuildSettingsPanel implements vscode.Disposable {
 
   private applyNativeTargetSettings(ref: CviWorkspaceProjectRef, scope: BuildSettingsScope, target: CviNativeTargetSettings): void {
     this.parser.setTargetType(ref.absolutePath, target.targetType);
-    for (const mode of scopeModes(scope)) {
+    if (scope === 'all') {
+      for (const mode of ALL_BUILD_MODES) {
+        this.parser.setNativeTargetSettings(ref.absolutePath, mode, target);
+      }
+      try {
+        const customs = this.parser.getCustomConfigurations(ref.absolutePath);
+        for (const c of customs) {
+          this.parser.setNativeTargetSettings(ref.absolutePath, c.name, target);
+        }
+      } catch { /* ignore */ }
+    } else {
+      const mode = scope.startsWith('custom:') ? scope.slice(7) : scope;
       this.parser.setNativeTargetSettings(ref.absolutePath, mode, target);
     }
   }
 
   private applyProjectSettings(ref: CviWorkspaceProjectRef, scope: BuildSettingsScope, settings: CviProjectBuildSettings): void {
-    for (const mode of scopeModes(scope)) {
-      this.settings.setSettings(ref, settings, mode);
+    if (scope === 'all') {
+      for (const mode of ALL_BUILD_MODES) {
+        this.settings.setSettings(ref, settings, mode);
+      }
+    } else {
+      this.settings.setSettings(ref, settings);
     }
   }
 
@@ -267,17 +281,36 @@ export class BuildSettingsPanel implements vscode.Disposable {
   }
 
   private representativeMode(scope: BuildSettingsScope): CviBuildMode {
-    return scope === 'all' ? this.buildMode : scope;
+    if (scope === 'all') {
+      return this.buildMode;
+    }
+    if (scope === 'debug' || scope === 'release' || scope === 'debug64' || scope === 'release64') {
+      return scope;
+    }
+    if (typeof scope === 'string' && scope.startsWith('custom:')) {
+      const name = scope.slice(7);
+      try {
+        if (this.projectRef) {
+          const customs = this.parser.getCustomConfigurations(this.projectRef.absolutePath);
+          const found = customs.find((c) => c.name.toLowerCase() === name.toLowerCase());
+          if (found) {
+            return found.is64Bit ? (found.isRelease ? 'release64' : 'debug64') : (found.isRelease ? 'release' : 'debug');
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return this.buildMode;
   }
 
   private render(ref: CviWorkspaceProjectRef, initialPage?: string): string {
     const representativeMode = this.representativeMode(this.selectedScope);
+    const customConfigs = this.parser.getCustomConfigurations(ref.absolutePath);
     const project = this.workspaces.getProject(ref);
     const settings = this.settings.getSettings(ref, representativeMode);
-    const target = this.parser.getNativeTargetSettings(ref.absolutePath, representativeMode);
-    const workspace = this.workspaces.currentWorkspace;
     const mode = this.selectedScope;
-    const dependencies = workspace?.projects.filter((candidate) => candidate.index !== ref.index).map((candidate) => {
+    const target = this.parser.getNativeTargetSettings(ref.absolutePath, mode === 'all' ? representativeMode : mode);
+    const workspace = this.workspaces.currentWorkspace;
+    const dependencies = workspace?.projects.filter((candidate: CviWorkspaceProjectRef) => candidate.index !== ref.index).map((candidate: CviWorkspaceProjectRef) => {
       const key = this.settings.dependencyKey(candidate);
       return `<label class="dependency"><input type="checkbox" data-dependency="${escapeHtml(key)}" ${settings.dependencies.includes(key) ? 'checked' : ''}> <span>${escapeHtml(candidate.name)}</span><small>${escapeHtml(candidate.relativePath)}</small></label>`;
     }).join('') || '<div class="muted">No other project is available in the current CVI workspace.</div>';
@@ -316,6 +349,9 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 h1{margin:0 0 4px;font-size:26px}h2{font-size:17px;margin:0 0 13px;display:flex;align-items:center;gap:7px}h3{font-size:14px;margin:0 0 10px}.muted,.subtitle{color:var(--vscode-descriptionForeground);line-height:1.45}.path{font-family:var(--vscode-editor-font-family);font-size:12px;overflow-wrap:anywhere;margin-top:4px;color:var(--vscode-descriptionForeground)}code{font-family:var(--vscode-editor-font-family)}
 .settings-sticky-header{position:sticky;top:0;z-index:8;background:var(--vscode-editor-background);isolation:isolate;margin-bottom:14px;border-bottom:1px solid var(--vscode-panel-border);box-shadow:0 5px 12px rgba(0,0,0,.08)}
 .toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding:10px 0;background:var(--vscode-editor-background)}.toolbar .actions,.actions{display:flex;gap:8px;flex-wrap:wrap}.toolbar .field{min-width:230px}.actions.bottom{justify-content:flex-end;margin-top:16px}
+.save-status{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--vscode-descriptionForeground);padding:4px 10px;border-radius:12px;background:var(--vscode-badge-background,rgba(255,255,255,0.07))}
+.save-status.saving{color:var(--vscode-editorWarning-foreground,#cca700)}
+.save-status-bottom{font-size:12px;color:var(--vscode-descriptionForeground)}
 .page-nav{display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;padding:6px 0 8px;scrollbar-width:thin;background:var(--vscode-editor-background)}.page-tab{flex:0 0 auto;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--vscode-descriptionForeground);padding:8px 11px;border-radius:4px 4px 0 0;font-weight:600}.page-tab:hover{background:var(--vscode-toolbar-hoverBackground);color:var(--vscode-foreground)}.page-tab.active{border-bottom-color:var(--vscode-textLink-foreground);background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground)}
 .settings-nav{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,340px) minmax(180px,auto);gap:10px;align-items:center;padding:8px 0 12px;background:var(--vscode-editor-background)}.page-context{display:flex;flex-direction:column;gap:2px;min-width:0}.page-context strong{font-size:13px}.page-context span{font-size:11px;color:var(--vscode-descriptionForeground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dirty{font-size:12px;color:var(--vscode-descriptionForeground);white-space:nowrap}.dirty.changed{color:var(--vscode-editorWarning-foreground);font-weight:600}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{grid-column:1/-1;border:1px solid var(--vscode-panel-border);border-radius:7px;background:var(--vscode-sideBar-background);padding:16px;min-width:0;scroll-margin-top:var(--cvi-sticky-offset)}.card.page-hidden,.card.filter-hidden{display:none!important}.wide{grid-column:1/-1}.fields,.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.field,label.field{display:flex;flex-direction:column;gap:5px;margin-top:0;font-weight:600}.field.wide{grid-column:1/-1}.section-body{padding-top:0}.settings-subsection{border-top:1px solid var(--vscode-panel-border);margin-top:14px;padding-top:12px}.settings-subsection:first-child{border-top:0;margin-top:0;padding-top:0}
@@ -331,12 +367,12 @@ body:not(.settings-js-ready) [data-settings-section]:not([data-settings-page="${
 <body data-target="${escapeHtml(target.targetType)}">
 <h1>CVI Project Settings</h1><div class="subtitle">${escapeHtml(ref.name)} · edited configuration: <strong>${escapeHtml(scopeLabel(mode))}</strong></div><div class="path">${escapeHtml(ref.absolutePath)}</div>
 <div id="settingsStickyHeader" class="settings-sticky-header">
-  <div class="toolbar"><div><label class="field">Edited build configuration<select id="configurationScope">${scopeOptions(mode)}</select></label><div class="muted">${mode === 'all' ? 'The entered values will be applied to Debug, Release, Debug64 and Release64.' : `Only ${escapeHtml(scopeLabel(mode))} will be modified.`}</div></div><div class="actions"><button id="save" type="button">Save CVI settings</button><button data-command="labwindowsCvi.openWorkspaceInCvi" class="secondary" type="button">Open in CVI</button></div></div>
+  <div class="toolbar"><div><label class="field">Edited build configuration<select id="configurationScope">${scopeOptions(mode, customConfigs)}</select></label><div class="muted">${mode === 'all' ? 'The entered values will be applied to all standard and custom configurations.' : `Only ${escapeHtml(scopeLabel(mode))} will be modified.`}</div></div><div class="actions"><span id="saveStatus" class="save-status"><span class="codicon codicon-check"></span> Saved</span></div></div>
   <nav id="pageNav" class="page-nav" aria-label="Settings pages">${pageNavigation}</nav>
   <div id="settingsNavigation" class="settings-nav"><input id="settingsFilter" type="search" placeholder="Filter settings on this page…" aria-label="Filter current settings page"><select id="sectionNav" aria-label="Jump to a section"><option value="">Jump to a section…</option></select><div class="page-context"><strong id="pageTitle">${escapeHtml(defaultPageMeta.label)}</strong><span id="pageDescription">${escapeHtml(defaultPageMeta.description)}</span><span id="dirtyState" class="dirty">Saved state</span></div></div>
 </div>
 <div class="grid">
-<section id="section-control" data-settings-section data-settings-page="overview" data-settings-title="Control center" class="card wide"><h2>Project control center</h2><div class="control-grid"><div class="control-group"><h3>Build and run</h3><div class="actions"><button data-command="labwindowsCvi.build">Build</button><button data-command="labwindowsCvi.rebuild">Rebuild</button><button data-command="labwindowsCvi.clean">Clean</button><button data-command="labwindowsCvi.run">Run</button><button data-command="labwindowsCvi.debugWithVsCode">Debug</button></div></div><div class="control-group"><h3>CVI native tools</h3><div class="actions"><button data-command="labwindowsCvi.openWorkspaceInCvi">Open in CVI</button><button data-command="labwindowsCvi.configureInstallation">CVI path</button></div></div><div class="control-group"><h3>IntelliSense</h3><div class="actions"><button data-command="labwindowsCvi.syncCppTools">Sync</button><button data-command="labwindowsCvi.diagnoseCppTools">Diagnose</button></div></div><div class="control-group"><h3>Diagnostics</h3><div class="actions"><button data-command="labwindowsCvi.showBuildProblems">Problems</button><button data-command="labwindowsCvi.showFullBuildTrace">Build Trace</button></div></div></div><div class="notice">This editor is organized by thematic pages. Use the page bar for broad areas and <code>Jump to a section...</code> for local navigation.</div></section>
+<section id="section-control" data-settings-section data-settings-page="overview" data-settings-title="Control center" class="card wide"><h2>Project control center</h2><div class="control-grid"><div class="control-group"><h3>Build and run</h3><div class="actions"><button data-command="labwindowsCvi.build">Build</button><button data-command="labwindowsCvi.rebuild">Rebuild</button><button data-command="labwindowsCvi.clean">Clean</button><button data-command="labwindowsCvi.run">Run</button><button data-command="labwindowsCvi.debugWithVsCode">Debug</button></div></div><div class="control-group"><h3>CVI native tools</h3><div class="actions"><button data-command="labwindowsCvi.configureInstallation">CVI path</button></div></div><div class="control-group"><h3>IntelliSense</h3><div class="actions"><button data-command="labwindowsCvi.syncCppTools">Sync</button><button data-command="labwindowsCvi.diagnoseCppTools">Diagnose</button></div></div><div class="control-group"><h3>Diagnostics</h3><div class="actions"><button data-command="labwindowsCvi.showBuildProblems">Problems</button><button data-command="labwindowsCvi.showFullBuildTrace">Build Trace</button></div></div></div><div class="notice">This editor is organized by thematic pages. Use the page bar for broad areas and <code>Jump to a section...</code> for local navigation.</div></section>
 <section id="section-native-storage" data-settings-section data-settings-page="project" data-settings-title="Native project storage" class="card wide"><h2>Native project storage</h2><p class="muted">Native target settings are read from and written to the selected CVI <code>.prj</code> configuration. A timestamped backup is created before every native write. Project dependencies remain mirrored in <code>.vscode/labwindows-cvi-build.json</code> until a non-empty CVI dependency reference sample is available.</p><div class="pill-row"><span class="pill">Project: ${escapeHtml(ref.name)}</span><span class="pill">Scope: ${escapeHtml(scopeLabel(mode))}</span><span class="pill">Target: ${escapeHtml(target.targetType)}</span></div></section>
 <section id="section-target" data-settings-section data-settings-page="project" data-settings-title="Target and output" class="card wide"><h2>Target and output</h2><div class="fields"><label class="field">Target type<select id="targetType">${targetOption('Executable', target.targetType)}${targetOption('Dynamic Link Library', target.targetType)}${targetOption('Static Library', target.targetType)}</select></label>${pathField('Output file', 'outputPath', target.outputPath)}</div><p class="muted">The output path applies to ${escapeHtml(scopeLabel(mode))} and is stored in the native CVI project file.</p><div class="target-note target-exe">Executable target: run/debug command-line options and executable metadata are active.</div><div class="target-note target-dll">DLL target: DLL copy, import-library, export and type-information options are active. Run options use an external host executable.</div><div class="target-note target-static">Static library target: runtime, DLL and executable launch options are not used.</div></section>
 <section id="section-target-creation" data-settings-section data-settings-page="runtime" data-settings-title="Target creation options" class="card wide target-nonlib"><h2>Target creation options</h2><div class="section-body"><div class="two"><label class="field target-exe">Application title<input id="applicationTitle" value="${escapeHtml(target.applicationTitle)}"></label><div class="target-exe">${pathField('Application icon file', 'iconFile', target.iconFile)}</div>${selectField('Run-time support', 'runtimeSupport', target.runtimeSupport, RUNTIME_SUPPORT_OPTIONS)}${selectField('Run-time engine binding', 'runtimeBinding', target.runtimeBinding, runtimeBindingOptions)}${selectField('Generate help from source', 'generateSourceDocumentation', target.generateSourceDocumentation, SOURCE_DOCUMENTATION_OPTIONS)}<div id="manifestPathRow">${pathField('Manifest file', 'manifestPath', target.manifestPath)}</div></div><div class="inline"><label class="check"><input id="manifestEmbed" type="checkbox" ${checked(target.manifestEmbed)}> Embed manifest</label><label class="check"><input id="embedProjectUirs" type="checkbox" ${checked(target.embedProjectUirs)}> Embed project .UIRs</label><label class="check"><input id="generateMapFile" type="checkbox" ${checked(target.generateMapFile)}> Generate map file</label><label class="check target-exe"><input id="createConsoleApplication" type="checkbox" ${checked(target.createConsoleApplication)}> Create console application</label><label class="check"><input id="embedTimestamp" type="checkbox" ${checked(target.embedTimestamp)}> Embed timestamp</label></div></div></section>
@@ -350,25 +386,55 @@ body:not(.settings-js-ready) [data-settings-section]:not([data-settings-page="${
 <section id="runOptionsSection" data-settings-section data-settings-page="run" data-settings-title="Run and debug command line" class="card wide target-nonlib"><h2>Run and debug command line</h2><div class="fields">${textField('Command line arguments','arguments',settings.run.arguments,'--option value')}${pathField('Working directory','workingDirectory',settings.run.workingDirectory)}${textField('Environment options','environmentOptions',settings.run.environmentOptions,'NAME=value;OTHER=value')}<div id="externalProcessPathRow" class="target-dll">${pathField('External executable for DLL debugging','externalProcessPath',settings.run.externalProcessPath)}</div></div><p class="muted target-dll">DLL targets are not launched directly. These fields are used when an external host executable loads the DLL.</p></section>
 <section id="section-dependencies" data-settings-section data-settings-page="dependencies" data-settings-title="Project dependencies and build order" class="card wide"><h2>Project dependencies and build order</h2><p class="muted">Checked projects are built before ${escapeHtml(ref.name)}.</p>${dependencies}</section>
 <section id="section-log" data-settings-section data-settings-page="diagnostics" data-settings-title="Build logs and Problems" class="card wide"><h2>Build logs and Problems</h2><div class="fields">${selectField('Build log detail', 'buildLogDetail', buildLogDetail, logDetailOptions)}</div><p class="muted">The main <code>LabWindows/CVI</code> channel is the structured human-readable build report. Full raw commands, stdout, stderr, exit codes and timings remain available in <code>LabWindows/CVI - Build Trace</code>. Build diagnostics are also sent to <code>View → Problems</code> when CVI/compiler output can be parsed.</p><div class="actions"><button data-command="labwindowsCvi.showBuildProblems">Show Build Problems</button><button data-command="labwindowsCvi.showFullBuildTrace">Show Full Build Trace</button></div></section>
-</div><div class="actions bottom"><button id="saveBottom" type="button">Save CVI settings</button></div>
+</div><div class="actions bottom"><span class="save-status-bottom"><span class="codicon codicon-check"></span> Auto-save enabled — changes save automatically</span></div>
 <script>
 const vscode=(window.__cviVsCodeApi||(window.__cviVsCodeApi=acquireVsCodeApi()));document.body.classList.add('settings-js-ready');const settingsPages=${settingsPageMetadata};const el=(id)=>document.getElementById(id);const val=(id)=>el(id)?.value||'';const flag=(id)=>!!el(id)?.checked;const lines=(id)=>val(id).replaceAll(String.fromCharCode(13),'').split(String.fromCharCode(10)).map(v=>v.trim()).filter(Boolean);const chosen=(selector)=>[...document.querySelectorAll(selector+':checked')].map(e=>e.value);let forcedModules=${JSON.stringify(target.forcedModules)};
 const bindingOptions={"Executable":${JSON.stringify(EXE_RUNTIME_BINDING_OPTIONS)},"Dynamic Link Library":${JSON.stringify(DLL_RUNTIME_BINDING_OPTIONS)},"Static Library":[]};
 const pageButtons=[...document.querySelectorAll('[data-settings-page-target]')];const sections=[...document.querySelectorAll('[data-settings-section]')];const sectionNav=el('sectionNav');const settingsFilter=el('settingsFilter');const pageTitle=el('pageTitle');const pageDescription=el('pageDescription');const dirtyState=el('dirtyState');let webviewState=(vscode&&typeof vscode.getState==='function'?vscode.getState():{})||{};let initialTargetPage=${initialPage ? JSON.stringify(initialPage) : 'null'};let activePage=(initialTargetPage&&settingsPages.some(page=>page.id===initialTargetPage))?initialTargetPage:(settingsPages.some(page=>page.id===webviewState.activePage)?webviewState.activePage:'overview');
-const markDirty=()=>{if(dirtyState){dirtyState.textContent='Unsaved changes';dirtyState.classList.add('changed');}};const markSaved=()=>{if(dirtyState){dirtyState.textContent='Saved state';dirtyState.classList.remove('changed');}};
+let saveTimer = null;
+const saveStatus = el('saveStatus');
+const setSaveState = (state) => {
+  if (saveStatus) {
+    if (state === 'saving') {
+      saveStatus.className = 'save-status saving';
+      saveStatus.textContent = 'Saving…';
+    } else {
+      saveStatus.className = 'save-status';
+      saveStatus.textContent = 'Saved';
+    }
+  }
+  if (dirtyState) {
+    dirtyState.textContent = state === 'saving' ? 'Saving…' : 'Saved';
+    dirtyState.classList.toggle('changed', state === 'saving');
+  }
+};
+const triggerAutoSave = (immediate = false) => {
+  setSaveState('saving');
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (immediate) {
+    vscode.postMessage(collectBuildParameters());
+  } else {
+    saveTimer = setTimeout(() => {
+      vscode.postMessage(collectBuildParameters());
+    }, 350);
+  }
+};
+const markDirty=()=>{triggerAutoSave(false);};
+const markSaved=()=>{setSaveState('saved');};
 const populateSections=()=>{if(!sectionNav)return;sectionNav.innerHTML='<option value="">Jump to a section…</option>';sections.filter(section=>section.dataset.settingsPage===activePage&&!section.classList.contains('page-hidden')&&!section.classList.contains('filter-hidden')).forEach(section=>{const option=document.createElement('option');option.value=section.id;option.textContent=section.dataset.settingsTitle||section.id;sectionNav.appendChild(option);});};
 const applyFilter=()=>{const query=(settingsFilter?.value||'').trim().toLowerCase();sections.forEach(section=>{const belongs=section.dataset.settingsPage===activePage;section.classList.toggle('page-hidden',!belongs);const text=((section.dataset.settingsTitle||'')+' '+section.textContent).toLowerCase();section.classList.toggle('filter-hidden',belongs&&!!query&&!text.includes(query));});populateSections();};
 const activatePage=(pageId,scrollToTop=false)=>{const meta=settingsPages.find(page=>page.id===pageId)||settingsPages[0];activePage=meta.id;pageButtons.forEach(button=>{const selected=button.dataset.settingsPageTarget===activePage;button.classList.toggle('active',selected);button.setAttribute('aria-current',selected?'page':'false');});if(pageTitle)pageTitle.textContent=meta.label;if(pageDescription)pageDescription.textContent=meta.description;webviewState={...webviewState,activePage};if(vscode&&typeof vscode.setState==='function')vscode.setState(webviewState);applyFilter();if(scrollToTop)document.getElementById('settingsStickyHeader')?.scrollIntoView({block:'start'});};
 const replaceOptions=(id,options)=>{const select=el(id);if(!select)return;const previous=select.value;select.innerHTML='';const values=[...options];if(previous&&!values.some(v=>v[0]===previous))values.push([previous,previous+' (existing value)']);for(const option of values){const node=document.createElement('option');node.value=option[0];node.textContent=option[1];if(option[0]===previous)node.selected=true;select.appendChild(node);}};
 const isInstrumentDriverOnly=()=>val('runtimeSupport')==='Instrument Driver Support Only';const updateForcedModuleControls=()=>{const unavailable=isInstrumentDriverOnly();const enabled=!unavailable&&flag('usingLoadExternalModule');const zone=el('loadExternalModuleSection');if(zone){zone.classList.toggle('disabled-zone',unavailable);zone.setAttribute('aria-disabled',String(unavailable));}if(el('usingLoadExternalModule'))el('usingLoadExternalModule').disabled=unavailable;for(const id of ['addForcedModules','addForcedModuleName'])if(el(id))el(id).disabled=!enabled;for(const button of document.querySelectorAll('.module-remove'))button.disabled=!enabled;const targetLabel=val('targetType')==='Dynamic Link Library'?'DLL':'executable';if(el('addForcedModules'))el('addForcedModules').textContent='Add files to '+targetLabel+'…';};
 const disableField=(id,disabled)=>{const node=el(id);if(node)node.disabled=disabled;};const disableBrowse=(field,disabled)=>{const button=document.querySelector('[data-browse-field="'+field+'"]');if(button)button.disabled=disabled;};const toggleDisabledZone=(id,disabled)=>{const zone=el(id);if(zone){zone.classList.toggle('disabled-control-zone',disabled);zone.setAttribute('aria-disabled',String(disabled));}};const updateImportLibraryChoicesSummary=()=>{const values=[];if(flag('useIviSubdirectoriesForImportLibraries'))values.push('IVI');if(flag('useVxiPnpSubdirectoriesForImportLibraries'))values.push('VXIplug&play');if(el('importLibraryChoicesSummary'))el('importLibraryChoicesSummary').textContent=values.length?values.join(' · '):'No import-library subdirectory';};const updateTargetCreationControls=()=>{const manifestEnabled=flag('manifestEmbed');disableField('manifestPath',!manifestEnabled);disableBrowse('manifestPath',!manifestEnabled);toggleDisabledZone('manifestPathRow',!manifestEnabled);};const updateDllOptionControls=()=>{const useDefault=flag('useDefaultImportLibBaseName');disableField('importLibBaseName',useDefault);toggleDisabledZone('importLibBaseNameRow',useDefault);const customDirectory=val('whereToCopyDll')==='Custom directory';disableField('customDirectoryToCopyDll',!customDirectory);disableBrowse('customDirectoryToCopyDll',!customDirectory);toggleDisabledZone('customDirectoryToCopyDllRow',!customDirectory);const headersEnabled=val('dllExports')!=='Symbols Marked As Export';const block=el('dllExportHeadersBlock');if(block){block.classList.toggle('disabled-sub-block',!headersEnabled);block.setAttribute('aria-disabled',String(!headersEnabled));}for(const input of document.querySelectorAll('[data-export-file]'))input.disabled=!headersEnabled;updateImportLibraryChoicesSummary();};let importChoicesSnapshot={ivi:false,vxi:false};const showImportLibraryChoices=()=>{importChoicesSnapshot={ivi:flag('useIviSubdirectoriesForImportLibraries'),vxi:flag('useVxiPnpSubdirectoriesForImportLibraries')};el('importLibraryChoicesDialog')?.classList.remove('hidden');};const hideImportLibraryChoices=(restore)=>{if(restore){if(el('useIviSubdirectoriesForImportLibraries'))el('useIviSubdirectoriesForImportLibraries').checked=importChoicesSnapshot.ivi;if(el('useVxiPnpSubdirectoriesForImportLibraries'))el('useVxiPnpSubdirectoriesForImportLibraries').checked=importChoicesSnapshot.vxi;}el('importLibraryChoicesDialog')?.classList.add('hidden');updateImportLibraryChoicesSummary();};const updateDllTypeInformationControls=()=>{const typeLibEnabled=flag('addTypeLibToDll');const helpLinksEnabled=typeLibEnabled&&flag('includeTypeLibHelpLinks');const typeBlock=el('typeLibraryResourceBlock');if(typeBlock){typeBlock.classList.toggle('disabled-sub-block',!typeLibEnabled);typeBlock.setAttribute('aria-disabled',String(!typeLibEnabled));}disableField('includeTypeLibHelpLinks',!typeLibEnabled);disableField('tlbHelpStyle',!helpLinksEnabled);disableField('typeLibFpFile',!typeLibEnabled);disableBrowse('typeLibFpFile',!typeLibEnabled);const niEnabled=flag('addNiTypeInfoToDll');const singleHeader=niEnabled&&flag('niTypeInfoFromSingleHeader');const niBlock=el('niTypeInfoResourceBlock');if(niBlock){niBlock.classList.toggle('disabled-sub-block',!niEnabled);niBlock.setAttribute('aria-disabled',String(!niEnabled));}disableField('niTypeInfoFromAllSources',!niEnabled);disableField('niTypeInfoFromSingleHeader',!niEnabled);const headerRow=el('singleHeaderNiTypeInfoRow');if(headerRow)headerRow.classList.toggle('hidden',!singleHeader);disableField('singleHeaderNiTypeInfoFile',!singleHeader);disableBrowse('singleHeaderNiTypeInfoFile',!singleHeader);};const updateSigningControls=()=>{const enabled=flag('signEnabled');toggleDisabledZone('signingDetailsBlock',!enabled);for(const id of ['signDebugBuild','signStore','signCertificate','signTimestampUrl','signDescriptionUrl'])disableField(id,!enabled);};const updateExecutableCommandLineControls=()=>{const dll=val('targetType')==='Dynamic Link Library';disableField('externalProcessPath',!dll);disableBrowse('externalProcessPath',!dll);toggleDisabledZone('externalProcessPathRow',!dll);};
-const renderForcedModules=()=>{forcedModules=[...new Set(forcedModules.map(v=>String(v).trim()).filter(Boolean))];if(el('forcedModules'))el('forcedModules').value=forcedModules.join(String.fromCharCode(10));const host=el('forcedModulesPreview');if(!host)return;host.innerHTML='';if(!forcedModules.length){const empty=document.createElement('div');empty.className='empty-modules';empty.textContent='No module is currently included.';host.appendChild(empty);updateForcedModuleControls();return;}forcedModules.forEach((value,index)=>{const row=document.createElement('div');row.className='module-row';const label=document.createElement('span');label.textContent=value;label.title=value;const remove=document.createElement('button');remove.type='button';remove.className='module-remove';remove.textContent='Remove';remove.addEventListener('click',()=>{forcedModules.splice(index,1);renderForcedModules();markDirty();});row.append(label,remove);host.appendChild(row);});updateForcedModuleControls();};
+const renderForcedModules=()=>{forcedModules=[...new Set(forcedModules.map(v=>String(v).trim()).filter(Boolean))];if(el('forcedModules'))el('forcedModules').value=forcedModules.join(String.fromCharCode(10));const host=el('forcedModulesPreview');if(!host)return;host.innerHTML='';if(!forcedModules.length){const empty=document.createElement('div');empty.className='empty-modules';empty.textContent='No module is currently included.';host.appendChild(empty);updateForcedModuleControls();return;}forcedModules.forEach((value,index)=>{const row=document.createElement('div');row.className='module-row';const label=document.createElement('span');label.textContent=value;label.title=value;const remove=document.createElement('button');remove.type='button';remove.className='module-remove';remove.textContent='Remove';remove.addEventListener('click',()=>{forcedModules.splice(index,1);renderForcedModules();triggerAutoSave(true);});row.append(label,remove);host.appendChild(row);});updateForcedModuleControls();};
 const updateTargetControls=()=>{document.body.dataset.target=val('targetType');replaceOptions('runtimeBinding',bindingOptions[val('targetType')]||[]);updateForcedModuleControls();updateTargetCreationControls();updateDllOptionControls();updateDllTypeInformationControls();updateSigningControls();updateExecutableCommandLineControls();applyFilter();};
-document.querySelectorAll('[data-browse-field]').forEach(button=>button.addEventListener('click',()=>vscode.postMessage({type:'browse',field:button.dataset.browseField})));const pageNavHost=el('pageNav')||document;pageNavHost.addEventListener('click',(event)=>{const target=event.target&&event.target.closest?event.target.closest('[data-settings-page-target]'):null;if(!target)return;const page=target.dataset.settingsPageTarget;if(!page)return;event.preventDefault();event.stopPropagation();activatePage(page,true);});document.querySelectorAll('[data-command]').forEach(button=>button.addEventListener('click',()=>vscode.postMessage({type:'command',command:button.dataset.command})));sectionNav?.addEventListener('change',()=>{const id=sectionNav.value;if(id)document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});sectionNav.value='';});settingsFilter?.addEventListener('input',applyFilter);document.querySelectorAll('input,select,textarea').forEach(node=>node.addEventListener('input',markDirty));
-el('targetType')?.addEventListener('change',updateTargetControls);el('configurationScope')?.addEventListener('change',()=>vscode.postMessage({type:'changeScope',scope:val('configurationScope')}));el('runtimeSupport')?.addEventListener('change',updateForcedModuleControls);el('manifestEmbed')?.addEventListener('change',updateTargetCreationControls);el('useDefaultImportLibBaseName')?.addEventListener('change',updateDllOptionControls);el('whereToCopyDll')?.addEventListener('change',updateDllOptionControls);el('dllExports')?.addEventListener('change',updateDllOptionControls);el('openImportLibraryChoices')?.addEventListener('click',showImportLibraryChoices);el('confirmImportLibraryChoices')?.addEventListener('click',()=>hideImportLibraryChoices(false));el('cancelImportLibraryChoices')?.addEventListener('click',()=>hideImportLibraryChoices(true));el('importLibraryChoicesDialog')?.addEventListener('click',(event)=>{if(event.target===el('importLibraryChoicesDialog'))hideImportLibraryChoices(true);});el('usingLoadExternalModule')?.addEventListener('change',updateForcedModuleControls);el('addTypeLibToDll')?.addEventListener('change',updateDllTypeInformationControls);el('includeTypeLibHelpLinks')?.addEventListener('change',updateDllTypeInformationControls);el('addNiTypeInfoToDll')?.addEventListener('change',updateDllTypeInformationControls);el('niTypeInfoFromAllSources')?.addEventListener('change',updateDllTypeInformationControls);el('niTypeInfoFromSingleHeader')?.addEventListener('change',updateDllTypeInformationControls);el('signEnabled')?.addEventListener('change',updateSigningControls);el('addForcedModules')?.addEventListener('click',()=>vscode.postMessage({type:'browseForcedModules'}));el('addForcedModuleName')?.addEventListener('click',()=>vscode.postMessage({type:'promptForcedModuleName'}));
-window.addEventListener('message',(event)=>{const message=event.data;if(message?.type==='activatePage'&&typeof message.page==='string'){activatePage(message.page,true);}if(message?.type==='setField'&&el(message.field)){el(message.field).value=message.value||'';markDirty();}if(message?.type==='appendForcedModules'&&Array.isArray(message.values)){forcedModules.push(...message.values);renderForcedModules();markDirty();}});
+document.querySelectorAll('[data-browse-field]').forEach(button=>button.addEventListener('click',()=>vscode.postMessage({type:'browse',field:button.dataset.browseField})));const pageNavHost=el('pageNav')||document;pageNavHost.addEventListener('click',(event)=>{const target=event.target&&event.target.closest?event.target.closest('[data-settings-page-target]'):null;if(!target)return;const page=target.dataset.settingsPageTarget;if(!page)return;event.preventDefault();event.stopPropagation();activatePage(page,true);});document.querySelectorAll('[data-command]').forEach(button=>button.addEventListener('click',()=>vscode.postMessage({type:'command',command:button.dataset.command})));sectionNav?.addEventListener('change',()=>{const id=sectionNav.value;if(id)document.getElementById(id)?.scrollIntoView({behavior:'smooth',block:'start'});sectionNav.value='';});settingsFilter?.addEventListener('input',applyFilter);
+document.querySelectorAll('input:not([type="checkbox"]):not([type="radio"]), textarea').forEach(node=>{node.addEventListener('input',()=>triggerAutoSave(false));node.addEventListener('blur',()=>triggerAutoSave(true));});
+document.querySelectorAll('input[type="checkbox"], input[type="radio"], select:not(#configurationScope)').forEach(node=>node.addEventListener('change',()=>triggerAutoSave(true)));
+el('targetType')?.addEventListener('change',()=>{updateTargetControls();triggerAutoSave(true);});el('configurationScope')?.addEventListener('change',()=>vscode.postMessage({type:'changeScope',scope:val('configurationScope')}));el('runtimeSupport')?.addEventListener('change',()=>{updateForcedModuleControls();triggerAutoSave(true);});el('manifestEmbed')?.addEventListener('change',()=>{updateTargetCreationControls();triggerAutoSave(true);});el('useDefaultImportLibBaseName')?.addEventListener('change',()=>{updateDllOptionControls();triggerAutoSave(true);});el('whereToCopyDll')?.addEventListener('change',()=>{updateDllOptionControls();triggerAutoSave(true);});el('dllExports')?.addEventListener('change',()=>{updateDllOptionControls();triggerAutoSave(true);});el('openImportLibraryChoices')?.addEventListener('click',showImportLibraryChoices);el('confirmImportLibraryChoices')?.addEventListener('click',()=>{hideImportLibraryChoices(false);triggerAutoSave(true);});el('cancelImportLibraryChoices')?.addEventListener('click',()=>hideImportLibraryChoices(true));el('importLibraryChoicesDialog')?.addEventListener('click',(event)=>{if(event.target===el('importLibraryChoicesDialog'))hideImportLibraryChoices(true);});el('usingLoadExternalModule')?.addEventListener('change',()=>{updateForcedModuleControls();triggerAutoSave(true);});el('addTypeLibToDll')?.addEventListener('change',()=>{updateDllTypeInformationControls();triggerAutoSave(true);});el('includeTypeLibHelpLinks')?.addEventListener('change',()=>{updateDllTypeInformationControls();triggerAutoSave(true);});el('addNiTypeInfoToDll')?.addEventListener('change',()=>{updateDllTypeInformationControls();triggerAutoSave(true);});el('niTypeInfoFromAllSources')?.addEventListener('change',()=>{updateDllTypeInformationControls();triggerAutoSave(true);});el('niTypeInfoFromSingleHeader')?.addEventListener('change',()=>{updateDllTypeInformationControls();triggerAutoSave(true);});el('signEnabled')?.addEventListener('change',()=>{updateSigningControls();triggerAutoSave(true);});el('addForcedModules')?.addEventListener('click',()=>vscode.postMessage({type:'browseForcedModules'}));el('addForcedModuleName')?.addEventListener('click',()=>vscode.postMessage({type:'promptForcedModuleName'}));
+window.addEventListener('message',(event)=>{const message=event.data;if(message?.type==='activatePage'&&typeof message.page==='string'){activatePage(message.page,true);}if(message?.type==='saved'){setSaveState('saved');}if(message?.type==='setField'&&el(message.field)){el(message.field).value=message.value||'';triggerAutoSave(true);}if(message?.type==='appendForcedModules'&&Array.isArray(message.values)){forcedModules.push(...message.values);renderForcedModules();triggerAutoSave(true);}});
 const collectBuildParameters=()=>({type:'save',scope:val('configurationScope'),targetType:val('targetType'),buildLogDetail:val('buildLogDetail'),settings:{preBuildActions:lines('preBuildActions'),customBuildActions:lines('customBuildActions'),postBuildActions:lines('postBuildActions'),dependencies:[...document.querySelectorAll('[data-dependency]:checked')].map(e=>e.dataset.dependency),run:{arguments:val('arguments'),workingDirectory:val('workingDirectory'),environmentOptions:val('environmentOptions'),externalProcessPath:val('externalProcessPath')}},nativeTarget:{targetType:val('targetType'),outputPath:val('outputPath'),applicationTitle:val('applicationTitle'),iconFile:val('iconFile'),runtimeSupport:val('runtimeSupport'),runtimeBinding:val('runtimeBinding'),generateSourceDocumentation:val('generateSourceDocumentation'),manifestEmbed:flag('manifestEmbed'),manifestPath:val('manifestPath'),embedProjectUirs:flag('embedProjectUirs'),generateMapFile:flag('generateMapFile'),createConsoleApplication:flag('createConsoleApplication'),embedTimestamp:flag('embedTimestamp'),usingLoadExternalModule:flag('usingLoadExternalModule'),forcedModules:lines('forcedModules'),useDefaultImportLibBaseName:flag('useDefaultImportLibBaseName'),importLibBaseName:val('importLibBaseName'),whereToCopyDll:val('whereToCopyDll'),customDirectoryToCopyDll:val('customDirectoryToCopyDll'),useIviSubdirectoriesForImportLibraries:flag('useIviSubdirectoriesForImportLibraries'),useVxiPnpSubdirectoriesForImportLibraries:flag('useVxiPnpSubdirectoriesForImportLibraries'),dllExports:val('dllExports'),exportFiles:chosen('[data-export-file]'),addTypeLibToDll:flag('addTypeLibToDll'),includeTypeLibHelpLinks:flag('includeTypeLibHelpLinks'),tlbHelpStyle:val('tlbHelpStyle'),typeLibFpFile:val('typeLibFpFile'),addNiTypeInfoToDll:flag('addNiTypeInfoToDll'),useSingleHeaderForNiTypeInfo:flag('niTypeInfoFromSingleHeader'),singleHeaderNiTypeInfoFile:val('singleHeaderNiTypeInfoFile'),versionInfo:{numericFileVersion:val('numericFileVersion'),numericProductVersion:val('numericProductVersion'),comments:val('versionComments'),companyName:val('companyName'),fileDescription:val('fileDescription'),fileVersion:val('fileVersion'),internalName:val('internalName'),legalCopyright:val('legalCopyright'),legalTrademarks:val('legalTrademarks'),originalFilename:val('originalFilename'),privateBuild:val('privateBuild'),productName:val('productName'),productVersion:val('productVersion'),specialBuild:val('specialBuild')},signing:{enabled:flag('signEnabled'),store:val('signStore'),certificate:val('signCertificate'),timestampUrl:val('signTimestampUrl'),descriptionUrl:val('signDescriptionUrl'),signDebugBuild:flag('signDebugBuild')}}});
-const saveNow=()=>{markSaved();vscode.postMessage(collectBuildParameters());};el('save')?.addEventListener('click',saveNow);el('saveBottom')?.addEventListener('click',saveNow);
 renderForcedModules();updateTargetControls();activatePage(activePage,false);
 </script></body></html>`;
   }
@@ -386,17 +452,35 @@ function escapeHtml(value: string): string { return String(value ?? '').replace(
 function stripCodicon(value: string): string { return value.replace(/^\$\([^)]*\)\s*/, ''); }
 function normalizeBuildLogDetail(value: string | undefined): 'compact' | 'normal' | 'verbose' { return value === 'compact' || value === 'verbose' ? value : 'normal'; }
 function safeScriptJson(value: unknown): string { return JSON.stringify(value).replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/&/g, '\\u0026'); }
-function scopeModes(scope: BuildSettingsScope): CviBuildMode[] { return scope === 'all' ? [...ALL_BUILD_MODES] : [scope]; }
-function scopeLabel(scope: BuildSettingsScope): string { return ({ debug: 'Debug', release: 'Release', debug64: 'Debug64', release64: 'Release64', all: 'All Configurations' } as const)[scope]; }
-function scopeOptions(selected: BuildSettingsScope): string { return scopeChoices().map((entry) => `<option value="${entry.id}" ${entry.id === selected ? 'selected' : ''}>${escapeHtml(entry.label)}</option>`).join(''); }
-function scopeChoices(): Array<{ id: BuildSettingsScope; label: string; description?: string }> { return [
-  { id: 'debug', label: 'Debug', description: '32-bit debug configuration' },
-  { id: 'release', label: 'Release', description: '32-bit release configuration' },
-  { id: 'debug64', label: 'Debug64', description: '64-bit debug configuration' },
-  { id: 'release64', label: 'Release64', description: '64-bit release configuration' },
-  { id: 'all', label: 'All Configurations', description: 'Apply entered values to every build configuration' }
-]; }
-function parseScope(value: unknown, fallback: BuildSettingsScope): BuildSettingsScope { return value === 'debug' || value === 'release' || value === 'debug64' || value === 'release64' || value === 'all' ? value : fallback; }
+function scopeModes(scope: BuildSettingsScope): CviBuildMode[] { return scope === 'all' ? [...ALL_BUILD_MODES] : [scope as CviBuildMode]; }
+function scopeLabel(scope: BuildSettingsScope): string {
+  if (scope === 'debug') return 'Debug';
+  if (scope === 'release') return 'Release';
+  if (scope === 'debug64') return 'Debug64';
+  if (scope === 'release64') return 'Release64';
+  if (scope === 'all') return 'All Configurations';
+  if (typeof scope === 'string' && scope.startsWith('custom:')) return `Custom: ${scope.slice(7)}`;
+  return String(scope);
+}
+function scopeChoices(customConfigs: import('../model/cviParser').CviCustomBuildConfig[] = []): Array<{ id: string; label: string; description?: string }> {
+  return [
+    { id: 'debug', label: 'Debug', description: '32-bit debug configuration' },
+    { id: 'release', label: 'Release', description: '32-bit release configuration' },
+    { id: 'debug64', label: 'Debug64', description: '64-bit debug configuration' },
+    { id: 'release64', label: 'Release64', description: '64-bit release configuration' },
+    ...customConfigs.map((c) => ({ id: `custom:${c.name}`, label: `Custom: ${c.name}`, description: `${c.is64Bit ? '64-bit' : '32-bit'} ${c.isRelease ? 'Release' : 'Debug'} custom configuration` })),
+    { id: 'all', label: 'All Configurations', description: 'Apply entered values to every build configuration' }
+  ];
+}
+function scopeOptions(selected: BuildSettingsScope, customConfigs: import('../model/cviParser').CviCustomBuildConfig[] = []): string {
+  return scopeChoices(customConfigs).map((entry) => `<option value="${entry.id}" ${entry.id === selected ? 'selected' : ''}>${escapeHtml(entry.label)}</option>`).join('');
+}
+function parseScope(value: unknown, fallback: BuildSettingsScope): BuildSettingsScope {
+  if (typeof value === 'string' && (value === 'debug' || value === 'release' || value === 'debug64' || value === 'release64' || value === 'all' || value.startsWith('custom:'))) {
+    return value;
+  }
+  return fallback;
+}
 async function pickStoredValue(title: string, options: SelectOption[], selected: string): Promise<string | undefined> { const list = [...options]; if (selected && !list.some(([value]) => value === selected)) { list.push([selected, `${selected} (existing value)`]); } const picked = await vscode.window.showQuickPick(list.map(([value, label]) => ({ value, label, description: value === label ? undefined : value })), { title }); return picked?.value; }
 function defaultDialogUri(currentValue: string, projectDirectory: string): vscode.Uri { if (!currentValue) { return vscode.Uri.file(projectDirectory); } const normalizedValue = normalizeRuntimePath(currentValue); const resolved = path.isAbsolute(normalizedValue) || path.win32.isAbsolute(normalizedValue) ? normalizedValue : path.resolve(projectDirectory, normalizedValue); if (fs.existsSync(resolved)) { return vscode.Uri.file(resolved); } const directory = path.dirname(resolved); return vscode.Uri.file(fs.existsSync(directory) ? directory : projectDirectory); }
 function browseTitle(field: string): string { return ({ outputPath: 'Select output file', iconFile: 'Select application icon file', manifestPath: 'Select manifest file', customDirectoryToCopyDll: 'Select DLL copy directory', typeLibFpFile: 'Select function-panel file', singleHeaderNiTypeInfoFile: 'Select NI type-information header', workingDirectory: 'Select working directory', externalProcessPath: 'Select external executable for DLL debugging' } as Record<string, string>)[field] ?? 'Select file'; }

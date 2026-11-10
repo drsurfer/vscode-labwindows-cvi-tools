@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { CviProject, CviProjectFile, CviWorkspaceProjectRef } from '../model/types';
 import { CviWorkspaceService } from '../services/cviWorkspaceService';
+import { CviBuildService } from '../services/cviBuildService';
 
 export type CviTreeNode = WorkspaceNode | ProjectNode | FolderNode | FileNode | PlaceholderNode;
 
@@ -40,8 +41,14 @@ export class CviTreeProvider implements vscode.TreeDataProvider<CviTreeNode>, vs
   private readonly changeEmitter = new vscode.EventEmitter<CviTreeNode | undefined | null | void>();
   readonly onDidChangeTreeData = this.changeEmitter.event;
 
-  constructor(private readonly workspaces: CviWorkspaceService) {
+  constructor(
+    private readonly workspaces: CviWorkspaceService,
+    private readonly builds?: CviBuildService
+  ) {
     this.workspaces.onDidChange(() => this.refresh());
+    if (this.builds) {
+      this.builds.onDidChangeBuilding(() => this.refresh());
+    }
   }
 
   refresh(): void {
@@ -266,10 +273,17 @@ export class CviTreeProvider implements vscode.TreeDataProvider<CviTreeNode>, vs
     const active = node.ref.index === workspace.activeProjectIndex;
     const project = this.workspaces.getProject(node.ref);
     const item = new vscode.TreeItem(node.ref.name, vscode.TreeItemCollapsibleState.Collapsed);
-    item.description = `${active ? 'active · ' : ''}${project?.targetType ?? (node.ref.exists ? 'project' : 'missing')}`;
-    item.tooltip = node.ref.absolutePath;
+    const isCurrentlyBuilding = this.builds?.isBuilding && this.builds.buildingProjectPath === node.ref.absolutePath;
+    item.description = isCurrentlyBuilding
+      ? `${active ? 'active · ' : ''}building...`
+      : `${active ? 'active · ' : ''}${project?.targetType ?? (node.ref.exists ? 'project' : 'missing')}`;
+    item.tooltip = isCurrentlyBuilding
+      ? `${node.ref.absolutePath} (Build in progress)`
+      : node.ref.absolutePath;
     item.contextValue = 'cviProject';
-    item.iconPath = new vscode.ThemeIcon(active ? 'star-full' : node.ref.exists ? 'project' : 'warning');
+    item.iconPath = isCurrentlyBuilding
+      ? new vscode.ThemeIcon('sync~spin')
+      : new vscode.ThemeIcon(active ? 'star-full' : node.ref.exists ? 'project' : 'warning');
     return item;
   }
 
