@@ -2,6 +2,27 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.19] - 2026-11-10
+
+### Consolidated
+- **Unified Release Consolidation**:
+  - Consolidated and harmonized all development branches into `main` in preparation for public release.
+  - Combined byte-for-byte `.prj` project serialization fidelity with the complete UI & UX overhaul, multithreaded debugging diagnostics, and custom build configuration engine.
+  - Fully integrated settings auto-save, process threads visualization, and extended compiler option coverage across all project types (Executable, DLL, and Static Library).
+
+## [0.0.18] - 2026-11-10
+
+### Fixed
+- **Project (.prj) Serialization Fidelity (Static Library, Executable, DLL)**:
+  - Ensured 100% byte-for-byte serialization fidelity matching native LabWindows/CVI IDE output across all project types (`Static Library`, `Executable`, and `Dynamic Link Library`).
+  - **In-Place Key Replacement**: Replaced existing single-line and multi-line (`Line0001..LineXXXX`) INI key entries in-place (`replaceKeyLines`) preserving exact key ordering within sections.
+  - **Multi-Line Build Actions Preservation**: Added full support for multi-line build actions (`Build Action<N> Line<NNNN>`), preventing post-build actions from being cleared on save.
+  - **CVI Chunk Splitting Size**: Standardized long value string splitting (`splitCviLongValue`) to 80 characters matching native CVI line splitting rules.
+  - **Macro Evaluation vs Template Preservation**: Implemented `expandCviVersionMacros` for version templates (`%company`, `%application`, `%rel_dbg`, `%arch`, `%basename`, `%filename`, `%f1..%f4`, `%p1..%p4`, `%Y`) and preserved existing unedited version fields and evaluated strings without unwanted modification.
+  - **Conditional Key Writing**: Omitted unused/default keys (`Compiler Defines`, `Compile with Precompiled Include File`, `Add NI Type Info To DLL`, `Use Single Header for NI Type Info`, warning/error lists) when not present in original `.prj` or not enabled.
+  - **Export Files Formatting**: Formatted DLL export entries as `Export File1`, `Export File2` replacing in-place to match native CVI conventions.
+  - **Mode-Specific Output and Action Preservation**: Preserved configuration-specific target output paths and build actions when saving with scope `'all'`.
+
 ## [0.0.17] - 2026-11-10
 
 ### Added
@@ -45,66 +66,6 @@ All notable changes to the "LabWindows/CVI Tools" extension will be documented i
 ### Removed
 - **Redundant "Open in CVI" Action Buttons**:
   - Removed "Open in CVI" buttons from the CVI Home panel and the Build Settings panel header and Overview card. (The command remains available via the Command Palette).
-
-## [0.0.16] - 2026-11-09
-
-### Added
-- **Parameterized Settings Navigation**:
-  - Enhanced `labwindowsCvi.editTargetSettings` and `labwindowsCvi.editBuildSettings` to accept an optional target tab ID (e.g. `'build'`, `'dependencies'`), enabling direct programmatic and contextual jumps into specific settings sections.
-- **Roadmap & Milestone Tracking**:
-  - Added comprehensive `TODO.md` tracking all completed UX/UI items and outlining upcoming architectural features (Build options completion, alternative compilers, auto-saving settings, removing "Open in CVI" buttons, custom build configurations, and installer generation).
-
-### Changed
-- **Direct Tab Navigation from CVI Actions**:
-  - Clicking **Build steps** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Build steps** tab (Pre-build, Custom-build, and Post-build actions).
-  - Clicking **Dependencies** in the "CVI Actions" view now opens CVI Project Settings directly focused on the **Dependencies** tab (Project dependencies and build order).
-  - Implemented bidirectional Webview messaging (`activatePage`) ensuring that clicking an action immediately reveals, switches to, and scrolls to the target tab even if the settings panel is already open in the background.
-  - Eliminated UI flicker on initial panel load by generating HTML pre-scoped to the requested tab instead of defaulting to Overview.
-
-## [0.0.15] - 2026-11-09
-
-### Changed
-- **Show Full Pathnames Menu Action**:
-  - Updated context menu and title bar action label to "Show Full Pathnames" with dynamic checkmark (`✓ Show Full Pathnames`) when pathnames are toggled on.
-- **Home Page Activation & Startup Guard**:
-  - Fixed duplicate Home page tab creation when opening a CVI workspace from an empty VS Code window.
-  - Prevented automatic Home page opening on startup when a VS Code workspace is loaded, preserving the existing editor layout and tab state.
-- **Interactive CVI Actions View**:
-  - Streamlined the "CVI Actions" view by converting read-only status rows into interactive, clickable actions:
-    - *Build Mode*: triggers build mode selection.
-    - *Target Type*: triggers target type selection.
-    - *Command Line Arguments*: interactive prompt to view and edit command line parameters.
-    - *Working Directory*: interactive prompt with file-system folder picker to set the execution working directory.
-    - *Environment Variables*: interactive prompt to set custom execution environment variables.
-  - Added contextual edit buttons on hover for immediate configuration.
-
-### Removed
-- **Safe Mode Fallback Options**:
-  - Completely removed obsolete "Safe Mode" commands (`labwindowsCvi.editTargetSettingsSafeMode`, `labwindowsCvi.editBuildSettingsSafeMode`, `labwindowsCvi.editBuildOptionsSafeMode`) and their toolbar buttons across Target Settings, Build Settings, and Build Options panels.
-
-## [0.0.14] - 2026-11-09
-
-### Removed
-- **Redundant "Open the CVI home page" Action**:
-  - Removed duplicate action link from empty workspace explorer view welcome content. The Home page remains accessible via the title bar and status bar home actions.
-
-### Added
-- **Home Page Single-Instance Activation Guard**:
-  - Implemented `WebviewPanelSerializer` to restore existing Home page instances across window reloads without duplicating tabs.
-  - Added startup guard preventing duplicate tabs and redundant focus stealing on extension activation.
-- **Recent Workspaces & Projects Management**:
-  - Added global history tracking for recently opened CVI workspaces (`.cws`) and projects (`.prj`).
-  - Added interactive "Recent workspaces and projects" section to the CVI Home page with quick opening and item removal.
-  - Added `labwindowsCvi.openRecent` quick-pick command (`$(history)`) with inline removal and clear-all actions.
-  - Implemented intelligent associated workspace detection for standalone `.prj` files with configurable behavior (`labwindowsCvi.openProjectWorkspaceBehavior`: `prompt`, `openWorkspace`, or `openStandalone`).
-- **Project Tree View: Native CVI Layout, Ordering & Drag-and-Drop**:
-  - Eliminated synthetic/automatic folder hierarchies in favor of faithful LabWindows/CVI virtual folders matching `.prj` declarations.
-  - Files not assigned to a folder or marked `Not In A Folder` are placed directly at the project root.
-  - Exact preservation of folder and file order matching `.prj` sequence (`[Folders]` and `[File XXXX]` declarations) without alphabetical sorting.
-  - Added manual reordering commands (`labwindowsCvi.moveItemUp`, `labwindowsCvi.moveItemDown`) with `Alt+Up` / `Alt+Down` shortcut support.
-  - Added full drag-and-drop reordering: drag files before other files or into virtual folders/root; reorder virtual folders in `[Folders]`.
-  - Added context menu and title bar toggle for **Full File Paths** (`labwindowsCvi.toggleShowFullFilePaths` / `labwindowsCvi.showFullFilePaths`) switching between file name only and complete path display.
-  - Added multi-select batch support for contextual file actions (exclude, include, remove, toggle `.obj` compile, move to folder).
 
 ## [0.0.13] - 2026-11-05
 

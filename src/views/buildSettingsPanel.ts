@@ -154,15 +154,33 @@ export class BuildSettingsPanel implements vscode.Disposable {
   }
 
   private applyNativeTargetSettings(ref: CviWorkspaceProjectRef, scope: BuildSettingsScope, target: CviNativeTargetSettings): void {
-    this.parser.setTargetType(ref.absolutePath, target.targetType);
+    const representative = this.representativeMode(scope);
+    const currentTarget = this.parser.getNativeTargetSettings(ref.absolutePath, representative);
+    if (currentTarget.targetType !== target.targetType) {
+      this.parser.setTargetType(ref.absolutePath, target.targetType);
+    }
     if (scope === 'all') {
       for (const mode of ALL_BUILD_MODES) {
-        this.parser.setNativeTargetSettings(ref.absolutePath, mode, target);
+        if (mode !== representative) {
+          const existingTarget = this.parser.getNativeTargetSettings(ref.absolutePath, mode);
+          const modeTarget: CviNativeTargetSettings = {
+            ...target,
+            outputPath: existingTarget.outputPath || target.outputPath
+          };
+          this.parser.setNativeTargetSettings(ref.absolutePath, mode, modeTarget);
+        } else {
+          this.parser.setNativeTargetSettings(ref.absolutePath, mode, target);
+        }
       }
       try {
         const customs = this.parser.getCustomConfigurations(ref.absolutePath);
         for (const c of customs) {
-          this.parser.setNativeTargetSettings(ref.absolutePath, c.name, target);
+          const existingTarget = this.parser.getNativeTargetSettings(ref.absolutePath, c.name);
+          const modeTarget: CviNativeTargetSettings = {
+            ...target,
+            outputPath: existingTarget.outputPath || target.outputPath
+          };
+          this.parser.setNativeTargetSettings(ref.absolutePath, c.name, modeTarget);
         }
       } catch { /* ignore */ }
     } else {
@@ -172,9 +190,21 @@ export class BuildSettingsPanel implements vscode.Disposable {
   }
 
   private applyProjectSettings(ref: CviWorkspaceProjectRef, scope: BuildSettingsScope, settings: CviProjectBuildSettings): void {
+    const representative = this.representativeMode(scope);
     if (scope === 'all') {
       for (const mode of ALL_BUILD_MODES) {
-        this.settings.setSettings(ref, settings, mode);
+        if (mode !== representative) {
+          const existingActions = this.parser.getProjectBuildActions(ref.absolutePath, mode);
+          const modeSettings: CviProjectBuildSettings = {
+            ...settings,
+            preBuildActions: existingActions.nativeSectionsPresent ? existingActions.preBuildActions : settings.preBuildActions,
+            customBuildActions: existingActions.nativeSectionsPresent ? existingActions.customBuildActions : settings.customBuildActions,
+            postBuildActions: existingActions.nativeSectionsPresent ? existingActions.postBuildActions : settings.postBuildActions
+          };
+          this.settings.setSettings(ref, modeSettings, mode);
+        } else {
+          this.settings.setSettings(ref, settings, mode);
+        }
       }
     } else {
       this.settings.setSettings(ref, settings);

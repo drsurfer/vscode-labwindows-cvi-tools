@@ -25,6 +25,11 @@
   - Support user-defined build configurations beyond the four standard targets (`Debug`, `Release`, `Debug64`, `Release64`).
   - Mirror the native LabWindows/CVI "Manage Configurations" feature (create, duplicate, rename, delete configurations, and customize target settings per configuration).
 
+- [x] **Project (.prj) Serialization Fidelity (Static Library, Executable, DLL)**
+  - Ensure 100% byte-for-byte serialization fidelity matching native LabWindows/CVI IDE output across all project types.
+  - In-place key replacement (`replaceKeyLines`) preserving exact key ordering within sections.
+  - Multi-line build action preservation (`Build Action<N> Line<NNNN>`), chunk splitting size standardization (80 chars), and version macro template preservation (`%company`, `%application`, `%rel_dbg`, etc.).
+
 - [x] **Remove "Open the CVI home page" action**
   - Locate and remove the action button/link in the empty workspace view (`package.json`, views, and command contributions).
   - Justification: Action is obsolete, redundant, and confusing.
