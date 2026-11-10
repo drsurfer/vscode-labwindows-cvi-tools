@@ -128,7 +128,11 @@ export class CviResourceTrackerService implements vscode.Disposable {
               }
               if (message.type === 'event' && message.event === 'output') {
                 const outText = message.body?.output ?? '';
-                if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
+                if (outText.includes('[LABWINDOWS/CVI FATAL RUN-TIME ERROR]')) {
+                  this.hasPendingRuntimeError = true;
+                  this.output.appendLine('[CVI Runtime] 🛑 LabWindows/CVI FATAL Run-Time Error encountered! Execution halted.');
+                  void vscode.window.showErrorMessage('LabWindows/CVI FATAL Run-Time Error: Execution paused at fatal memory/pointer error. See Debug Console and source line.');
+                } else if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
                   this.hasPendingRuntimeError = true;
                   this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Run-Time Check Error encountered! Execution paused.');
                   void vscode.window.showWarningMessage('LabWindows/CVI Run-Time Check Error: Execution paused at failed run-time check (e.g. uninitialized variable or bounds check). See Debug Console and source line.');
