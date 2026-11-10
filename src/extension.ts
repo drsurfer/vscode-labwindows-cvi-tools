@@ -26,6 +26,7 @@ import { CviResourceTrackerService } from './services/cviResourceTrackerService'
 import { CviResourceTreeProvider } from './providers/cviResourceTreeProvider';
 import { CviThreadTrackerService } from './services/cviThreadTrackerService';
 import { CviThreadTreeProvider } from './providers/cviThreadTreeProvider';
+import { CviCpuStripchartPanel } from './views/cviCpuStripchartPanel';
 import { CviConfigurationService } from './services/cviConfigurationService';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -495,6 +496,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.exportResourceReport', () => resourceTracker.exportReport()),
     register('labwindowsCvi.manageConfigurations', () => configService.manageConfigurations()),
     register('labwindowsCvi.refreshProcessThreads', () => threadTreeProvider.refresh()),
+    register('labwindowsCvi.openCpuStripchart', () => CviCpuStripchartPanel.createOrShow(context.extensionUri, threadTracker)),
     register('labwindowsCvi.pauseAllThreads', () => threadTracker.pauseAllThreads()),
     register('labwindowsCvi.openResourceLocation', async (arg?: { file?: string; line?: number }) => {
       if (!arg?.file) return;

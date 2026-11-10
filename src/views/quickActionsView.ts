@@ -10,6 +10,7 @@ interface QuickActionsSummary {
   projectName: string;
   projectPath: string;
   buildMode: CviBuildMode;
+  customConfig?: string;
   targetType: string;
   commandLine: string;
   workingDirectory: string;
@@ -41,6 +42,11 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
   ) {
     this.disposables.push(this.workspaces.onDidChange(() => this.update()));
     this.disposables.push(this.builds.onDidChangeBuilding(() => this.update()));
+    this.disposables.push(vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('labwindowsCvi.buildMode') || e.affectsConfiguration('labwindowsCvi.customBuildConfiguration')) {
+        this.update();
+      }
+    }));
   }
 
   update(): void {
@@ -87,7 +93,15 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
     items.push(
       action(summary.projectName, 'labwindowsCvi.openProjectFile', 'project', `${summary.workspaceName} · ${summary.projectCount} project${summary.projectCount === 1 ? '' : 's'}`, 'Click to open project file (.prj)'),
       action('Target type', 'labwindowsCvi.selectTargetType', 'symbol-enum', summary.targetType, 'Click to switch CVI target type (Executable, DLL, Static Library)'),
-      action('Build mode', 'labwindowsCvi.selectBuildMode', 'settings-gear', modeDescription(summary.buildMode), 'Click to switch build mode (Debug/Release, x86/x64)'),
+      action(
+        'Build mode',
+        'labwindowsCvi.selectBuildMode',
+        'settings-gear',
+        summary.customConfig
+          ? `${summary.customConfig} (${modeDescription(summary.buildMode)})`
+          : modeDescription(summary.buildMode),
+        'Click to switch build mode or custom configuration (Manage Configurations…)'
+      ),
       action('Command line', 'labwindowsCvi.quickActions.editCommandLine', 'terminal', summary.commandLine, 'Click to edit runtime command-line arguments'),
       action('Working directory', 'labwindowsCvi.quickActions.editWorkingDirectory', 'folder', summary.workingDirectory, 'Click to edit runtime working directory'),
       action('Environment', 'labwindowsCvi.quickActions.editEnvironment', 'symbol-key', summary.environment, 'Click to edit runtime environment options'),
@@ -173,12 +187,14 @@ export class QuickActionsView implements vscode.TreeDataProvider<QuickActionNode
     const actionTotal = actionCounts.reduce((sum, count) => sum + count, 0);
     const missingFiles = project?.files.filter((file) => !file.exists).length ?? 0;
     const totalFiles = project?.files.length ?? 0;
+    const customConfig = vscode.workspace.getConfiguration('labwindowsCvi').get<string>('customBuildConfiguration', '').trim();
     return {
       workspaceName: workspace.name,
       projectCount: workspace.projects.length,
       projectName: ref.name,
       projectPath: ref.absolutePath,
       buildMode: this.builds.buildMode,
+      customConfig: customConfig || undefined,
       targetType: project?.targetType || 'Unknown',
       commandLine: settings.run.arguments.trim() ? settings.run.arguments.trim() : 'None',
       workingDirectory: settings.run.workingDirectory.trim() ? settings.run.workingDirectory.trim() : 'Default',

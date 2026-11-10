@@ -234,8 +234,8 @@ function getProjectModeSection(document: IniDocument, mode: CviBuildMode | strin
     return section;
   }
   for (const s of document.sections) {
-    if (/^Build Config \d{4} /i.test(s.name)) {
-      const configName = unquote(s.get('Config Name')) ?? s.name.replace(/^Build Config \d{4} /i, '').trim();
+    if (/^(?:Custom\s+)?Build Config(?:\s+\d+)?(?:\s+.*)?$/i.test(s.name)) {
+      const configName = unquote(s.get('Config Name')) ?? s.name.replace(/^(?:Custom\s+)?Build Config\s*\d*\s*/i, '').trim();
       if (configName.toLowerCase() === norm.toLowerCase()) {
         return s;
       }
@@ -739,7 +739,7 @@ function hasAnyVersionInfo(info: CviVersionInfoSettings): boolean {
   );
 }
 
-function expandCviVersionMacros(
+export function expandCviVersionMacros(
   template: string,
   context: {
     mode: CviBuildMode | string;
@@ -748,6 +748,9 @@ function expandCviVersionMacros(
     numericFileVersion: string;
     numericProductVersion: string;
     companyName: string;
+    configName?: string;
+    cviYear?: string;
+    cviVer?: string;
   }
 ): string {
   if (!template || !template.includes('%')) {
@@ -757,10 +760,14 @@ function expandCviVersionMacros(
   const is64 = modeStr.toLowerCase().endsWith('64');
   const isRelease = modeStr.toLowerCase().startsWith('release');
   const arch = is64 ? 'x64' : 'x86';
-  const relDbg = isRelease ? 'Release' : 'Debug';
+  const relDbg = isRelease ? 'release' : 'debug';
   const filename = path.basename(fromCviPath(context.outputPath));
   const basename = fileNameWithoutExtension(filename);
   const application = context.applicationTitle.trim() || basename;
+  const username = process.env.USERNAME || process.env.USER || '';
+  const configname = context.configName || configSuffix(String(context.mode));
+  const cviYear = context.cviYear || '2020';
+  const cviVer = context.cviVer || '20.0.0';
 
   const fileParts = (context.numericFileVersion || '1,0,0,0').split(/[,.]/).map((p) => p.trim());
   const prodParts = (context.numericProductVersion || '1,0,0,0').split(/[,.]/).map((p) => p.trim());
@@ -774,10 +781,12 @@ function expandCviVersionMacros(
   let result = template;
   result = result.replace(/%company/g, context.companyName || '');
   result = result.replace(/%application/g, application);
-  result = result.replace(/%rel_dbg/g, relDbg);
-  result = result.replace(/%arch/g, arch);
   result = result.replace(/%basename/g, basename);
   result = result.replace(/%filename/g, filename);
+  result = result.replace(/%user/g, username);
+  result = result.replace(/%configname/g, configname);
+  result = result.replace(/%rel_dbg/g, relDbg);
+  result = result.replace(/%arch/g, arch);
   result = result.replace(/%f1/g, fileParts[0] ?? '0');
   result = result.replace(/%f2/g, fileParts[1] ?? '0');
   result = result.replace(/%f3/g, fileParts[2] ?? '0');
@@ -786,6 +795,8 @@ function expandCviVersionMacros(
   result = result.replace(/%p2/g, prodParts[1] ?? '0');
   result = result.replace(/%p3/g, prodParts[2] ?? '0');
   result = result.replace(/%p4/g, prodParts[3] ?? '0');
+  result = result.replace(/%cvi_year/g, cviYear);
+  result = result.replace(/%cvi_ver/g, cviVer);
   result = result.replace(/%Y/g, year);
   result = result.replace(/%y/g, shortYear);
   result = result.replace(/%m/g, month);
@@ -1034,13 +1045,21 @@ export class CviParser {
         ? unquote(config.get('Company Name'))!
         : '';
 
+    const projectHeader = document.getSection('Project Header');
+    const prjVer = unquote(projectHeader?.get('Version')) ?? '2000';
+    const cviYear = prjVer === '2000' ? '2020' : '2020';
+    const cviVer = prjVer === '2000' ? '20.0.0' : `${Math.floor(parseInt(prjVer, 10) / 100)}.${Math.floor((parseInt(prjVer, 10) % 100) / 10)}.${parseInt(prjVer, 10) % 10}`;
+
     const macroContext = {
       mode,
       outputPath: settings.outputPath || resolveStoredPath(createExecutable, `Executable File_${configSuffix(mode)}`),
       applicationTitle: settings.applicationTitle,
       numericFileVersion: settings.versionInfo.numericFileVersion,
       numericProductVersion: settings.versionInfo.numericProductVersion,
-      companyName: resolvedCompany
+      companyName: resolvedCompany,
+      configName: configSuffix(mode),
+      cviYear,
+      cviVer
     };
 
     if (config.has('Numeric File Version') || hasAnyVersionInfo(settings.versionInfo)) {
@@ -1098,7 +1117,8 @@ export class CviParser {
           }
         }
         const suffix = String(projectIndex).padStart(4, '0');
-        const cwsModeSection = cwsDoc.getSection(`Default Build Config ${suffix} ${configSuffix(mode)}`);
+        const cwsModeSection = cwsDoc.getSection(`Default Build Config ${suffix} ${configSuffix(mode)}`)
+          ?? cwsDoc.getSection(`Custom Build Config ${suffix} ${configSuffix(mode)}`);
         if (cwsModeSection) {
           debuggingLevel = unquote(cwsModeSection.get('Debugging Level')) ?? debuggingLevel;
           profiling = unquote(cwsModeSection.get('Profile')) ?? profiling;
@@ -1242,7 +1262,9 @@ export class CviParser {
           }
         }
         const suffix = String(projectIndex).padStart(4, '0');
-        const sectionName = `Default Build Config ${suffix} ${configSuffix(mode)}`;
+        const customSecName = `Custom Build Config ${suffix} ${configSuffix(mode)}`;
+        const defaultSecName = `Default Build Config ${suffix} ${configSuffix(mode)}`;
+        const sectionName = cwsDoc.getSection(customSecName) ? customSecName : defaultSecName;
         const cwsModeSection = cwsDoc.ensureSection(sectionName);
         cwsModeSection.set('Debugging Level', quote(options.debuggingLevel));
         cwsModeSection.set('Profile', quote(options.profiling));
@@ -1282,14 +1304,55 @@ export class CviParser {
     return undefined;
   }
 
+  expandVersionMacros(projectPath: string, mode: CviBuildMode | string, text: string): string {
+    const document = IniDocument.parse(readText(projectPath));
+    const config = getProjectModeSection(document, mode);
+    const createExec = document.getSection('Create Executable');
+    const header = document.getSection('Project Header');
+    const versionNum = unquote(header?.get('Version')) ?? '2000';
+    const cviYear = versionNum === '2000' ? '2020' : '2020';
+    const cviVer = versionNum === '2000' ? '20.0.0' : `${Math.floor(parseInt(versionNum, 10) / 100)}.${Math.floor((parseInt(versionNum, 10) % 100) / 10)}.${parseInt(versionNum, 10) % 10}`;
+    const outputKey = `Executable File_${configSuffix(mode)}`;
+    const outputPath = resolveStoredPath(createExec ?? new IniSection('Create Executable', []), outputKey);
+    const applicationTitle = unquote(config.get('Application Title')) ?? '';
+    const numericFileVersion = unquote(config.get('Numeric File Version')) ?? '1,0,0,0';
+    const numericProductVersion = unquote(config.get('Numeric Prod Version')) ?? '1,0,0,0';
+    const companyName = unquote(config.get('Company Name')) ?? '';
+
+    return expandCviVersionMacros(text, {
+      mode,
+      outputPath,
+      applicationTitle,
+      numericFileVersion,
+      numericProductVersion,
+      companyName,
+      configName: configSuffix(mode),
+      cviYear,
+      cviVer
+    });
+  }
+
   getCustomConfigurations(projectPath: string, _workspacePath?: string): CviCustomBuildConfig[] {
     const document = IniDocument.parse(readText(projectPath));
     const configs: CviCustomBuildConfig[] = [];
     for (const section of document.sections) {
-      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
-      if (match) {
-        const index = parseInt(match[1], 10);
-        const name = unquote(section.get('Config Name')) ?? match[2].trim();
+      const nativeMatch = section.name.match(/^Custom Build Config\s*(\d+)$/i);
+      const legacyMatch = section.name.match(/^Build Config\s*(\d{1,4})(?:\s+(.+))?$/i);
+      if (nativeMatch) {
+        const index = parseInt(nativeMatch[1], 10);
+        const name = unquote(section.get('Config Name')) ?? `Custom ${index}`;
+        const is64Bit = parseBoolean(section.get('Is 64-Bit'));
+        const isRelease = parseBoolean(section.get('Is Release'));
+        configs.push({
+          index,
+          name,
+          sectionName: section.name,
+          is64Bit,
+          isRelease
+        });
+      } else if (legacyMatch) {
+        const index = parseInt(legacyMatch[1], 10);
+        const name = unquote(section.get('Config Name')) ?? legacyMatch[2]?.trim() ?? `Config ${index}`;
         const is64Bit = parseBoolean(section.get('Is 64-Bit'));
         const isRelease = parseBoolean(section.get('Is Release'));
         configs.push({
@@ -1319,11 +1382,15 @@ export class CviParser {
     let customHeaders = document.getSection('Custom Build Configs');
     if (!customHeaders) {
       customHeaders = new IniSection('Custom Build Configs', []);
-      document.sections.push(customHeaders);
+      const insertIdx = document.sections.findIndex((s) => /^Default Build Config/i.test(s.name));
+      if (insertIdx >= 0) {
+        document.sections.splice(insertIdx, 0, customHeaders);
+      } else {
+        document.sections.push(customHeaders);
+      }
     }
     const nextIndex = existing.length + 1;
-    const suffix = String(nextIndex).padStart(4, '0');
-    const newSectionName = `Build Config ${suffix} ${cleanName}`;
+    const newSectionName = `Custom Build Config ${nextIndex}`;
     const newSection = new IniSection(newSectionName, []);
 
     for (const entry of baseSection.entries()) {
@@ -1342,26 +1409,96 @@ export class CviParser {
     }
 
     customHeaders.set('Num Custom Build Configs', String(nextIndex));
-    document.sections.push(newSection);
 
-    const header = document.getSection('Project Header');
-    if (header) {
-      const baseOutputKey = `Executable File_${configSuffix(baseConfigName)}`;
-      const baseOutVal = header.get(baseOutputKey);
-      if (baseOutVal) {
-        header.set(`Executable File_${cleanName}`, baseOutVal);
+    const lastConfigIndex = document.sections.map((s, idx) => ({ s, idx })).filter(({ s }) => /^(?:Custom\s+)?Build Config/i.test(s.name)).pop();
+    if (lastConfigIndex) {
+      document.sections.splice(lastConfigIndex.idx + 1, 0, newSection);
+    } else {
+      document.sections.push(newSection);
+    }
+
+    // Replicate executable file entries in [Create Executable]
+    const createExec = document.getSection('Create Executable');
+    if (createExec) {
+      const baseKey = `Executable File_${configSuffix(baseConfigName)}`;
+      const basePrefix = baseKey.toLowerCase();
+      let copiedAny = false;
+      for (const entry of [...createExec.entries()]) {
+        const kLower = entry.key.toLowerCase();
+        if (kLower === basePrefix) {
+          createExec.set(`Executable File_${cleanName}`, entry.value);
+          copiedAny = true;
+        } else if (kLower.startsWith(basePrefix + ' ')) {
+          const suffix = entry.key.slice(baseKey.length);
+          createExec.set(`Executable File_${cleanName}${suffix}`, entry.value);
+          copiedAny = true;
+        }
+      }
+      if (!copiedAny) {
+        const dbgKey = 'Executable File_Debug';
+        const dbgVal = createExec.get(dbgKey);
+        if (dbgVal) {
+          createExec.set(`Executable File_${cleanName} Is Rel`, createExec.get(`${dbgKey} Is Rel`) ?? 'True');
+          createExec.set(`Executable File_${cleanName} Rel To`, createExec.get(`${dbgKey} Rel To`) ?? '"Project"');
+          createExec.set(`Executable File_${cleanName} Rel Path`, createExec.get(`${dbgKey} Rel Path`) ?? `"${path.basename(projectPath, path.extname(projectPath))}.exe"`);
+          createExec.set(`Executable File_${cleanName}`, dbgVal);
+        } else {
+          const exeName = `${path.basename(projectPath, path.extname(projectPath))}.exe`;
+          createExec.set(`Executable File_${cleanName} Is Rel`, 'True');
+          createExec.set(`Executable File_${cleanName} Rel To`, '"Project"');
+          createExec.set(`Executable File_${cleanName} Rel Path`, quote(exeName));
+          createExec.set(`Executable File_${cleanName}`, quote(toCviPath(path.join(path.dirname(projectPath), exeName))));
+        }
       }
     }
 
     writeText(projectPath, document.toString());
+
+    // Update companion .cws workspace file if present
+    const cwsPath = replaceExtension(projectPath, '.cws');
+    if (fs.existsSync(cwsPath)) {
+      try {
+        const cwsDoc = IniDocument.parse(readText(cwsPath));
+        const cwsSectionName = `Custom Build Config 0001 ${cleanName}`;
+        if (!cwsDoc.getSection(cwsSectionName)) {
+          const cwsSection = new IniSection(cwsSectionName, []);
+          cwsSection.set('Generate Browse Info', 'False');
+          cwsSection.set('Enable Uninitialized Locals Runtime Warning', 'True');
+          cwsSection.set('Batch Build', 'False');
+          cwsSection.set('Profile', quote('Disabled'));
+          cwsSection.set('Debugging Level', quote('Standard'));
+          cwsSection.set('Execution Trace', quote('Disabled'));
+          cwsSection.set('Command Line Args', quote(''));
+          cwsSection.set('Working Directory', quote(''));
+          cwsSection.set('Environment Options', quote(''));
+          cwsSection.set('External Process Path', quote(''));
+          cwsSection.lines.push('');
+
+          const depIdx = cwsDoc.sections.findIndex((s) => s.name.startsWith('Build Dependencies'));
+          if (depIdx >= 0) {
+            cwsDoc.sections.splice(depIdx, 0, cwsSection);
+          } else {
+            cwsDoc.sections.push(cwsSection);
+          }
+          writeText(cwsPath, cwsDoc.toString());
+        }
+      } catch {
+        // Ignore workspace update error
+      }
+    }
   }
 
   duplicateConfiguration(projectPath: string, sourceName: string, targetName: string): void {
-    this.addCustomConfiguration(projectPath, targetName, sourceName);
+    const existing = this.getCustomConfigurations(projectPath);
+    const sourceCustom = existing.find((c) => c.name.toLowerCase() === sourceName.trim().toLowerCase());
+    const is64 = sourceCustom ? sourceCustom.is64Bit : sourceName.toLowerCase().endsWith('64');
+    const isRel = sourceCustom ? sourceCustom.isRelease : sourceName.toLowerCase().includes('release');
+    this.addCustomConfiguration(projectPath, targetName, sourceName, is64, isRel);
   }
 
   renameCustomConfiguration(projectPath: string, oldName: string, newName: string): void {
     const document = IniDocument.parse(readText(projectPath));
+    const cleanOld = oldName.trim();
     const cleanNew = newName.trim();
     if (!cleanNew) {
       throw new Error('Configuration name cannot be empty.');
@@ -1373,11 +1510,9 @@ export class CviParser {
 
     let found = false;
     for (const section of document.sections) {
-      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
-      if (match) {
-        const curName = unquote(section.get('Config Name')) ?? match[2].trim();
-        if (curName.toLowerCase() === oldName.trim().toLowerCase()) {
-          section.name = `Build Config ${match[1]} ${cleanNew}`;
+      if (/^(?:Custom\s+)?Build Config/i.test(section.name)) {
+        const curName = unquote(section.get('Config Name')) ?? section.name.replace(/^(?:Custom\s+)?Build Config\s*\d*\s*/i, '').trim();
+        if (curName.toLowerCase() === cleanOld.toLowerCase()) {
           section.set('Config Name', quote(cleanNew));
           found = true;
           break;
@@ -1385,20 +1520,41 @@ export class CviParser {
       }
     }
     if (!found) {
-      throw new Error(`Custom configuration "${oldName}" was not found.`);
+      throw new Error(`Custom configuration "${cleanOld}" was not found.`);
     }
 
-    const header = document.getSection('Project Header');
-    if (header) {
-      const oldKey = `Executable File_${oldName.trim()}`;
-      const val = header.get(oldKey);
-      if (val) {
-        header.delete(oldKey);
-        header.set(`Executable File_${cleanNew}`, val);
+    const createExec = document.getSection('Create Executable');
+    if (createExec) {
+      const oldPrefix = `Executable File_${cleanOld}`.toLowerCase();
+      const newBaseKey = `Executable File_${cleanNew}`;
+      for (const entry of [...createExec.entries()]) {
+        const kLower = entry.key.toLowerCase();
+        if (kLower === oldPrefix) {
+          createExec.delete(entry.key);
+          createExec.set(newBaseKey, entry.value);
+        } else if (kLower.startsWith(oldPrefix + ' ')) {
+          const suffix = entry.key.slice(`Executable File_${cleanOld}`.length);
+          createExec.delete(entry.key);
+          createExec.set(`${newBaseKey}${suffix}`, entry.value);
+        }
       }
     }
 
     writeText(projectPath, document.toString());
+
+    // Update .cws if present
+    const cwsPath = replaceExtension(projectPath, '.cws');
+    if (fs.existsSync(cwsPath)) {
+      try {
+        const cwsDoc = IniDocument.parse(readText(cwsPath));
+        for (const s of cwsDoc.sections) {
+          if (s.name.toLowerCase() === `custom build config 0001 ${cleanOld.toLowerCase()}`) {
+            s.name = `Custom Build Config 0001 ${cleanNew}`;
+          }
+        }
+        writeText(cwsPath, cwsDoc.toString());
+      } catch {}
+    }
   }
 
   removeCustomConfiguration(projectPath: string, configName: string): void {
@@ -1408,9 +1564,8 @@ export class CviParser {
     const customSections: IniSection[] = [];
 
     for (const section of document.sections) {
-      const match = section.name.match(/^Build Config (\d{4}) (.+)$/i);
-      if (match) {
-        const curName = unquote(section.get('Config Name')) ?? match[2].trim();
+      if (/^Custom Build Config\s*\d+$/i.test(section.name) || /^Build Config\s*\d{1,4}/i.test(section.name)) {
+        const curName = unquote(section.get('Config Name')) ?? section.name.replace(/^(?:Custom\s+)?Build Config\s*\d*\s*/i, '').trim();
         if (curName.toLowerCase() === target) {
           continue;
         }
@@ -1422,9 +1577,7 @@ export class CviParser {
 
     customSections.forEach((section, idx) => {
       const nextIndex = idx + 1;
-      const suffix = String(nextIndex).padStart(4, '0');
-      const curName = unquote(section.get('Config Name')) ?? 'Config';
-      section.name = `Build Config ${suffix} ${curName}`;
+      section.name = `Custom Build Config ${nextIndex}`;
     });
 
     const customHeaders = document.getSection('Custom Build Configs');
@@ -1432,14 +1585,34 @@ export class CviParser {
       customHeaders.set('Num Custom Build Configs', String(customSections.length));
     }
 
-    const header = document.getSection('Project Header');
-    if (header) {
-      header.delete(`Executable File_${configName.trim()}`);
+    const createExec = document.getSection('Create Executable');
+    if (createExec) {
+      const prefix = `Executable File_${configName.trim()}`.toLowerCase();
+      for (const entry of [...createExec.entries()]) {
+        const kLower = entry.key.toLowerCase();
+        if (kLower === prefix || kLower.startsWith(prefix + ' ')) {
+          createExec.delete(entry.key);
+        }
+      }
     }
 
     document.sections.length = 0;
     document.sections.push(...remainingSections, ...customSections);
     writeText(projectPath, document.toString());
+
+    // Update .cws if present
+    const cwsPath = replaceExtension(projectPath, '.cws');
+    if (fs.existsSync(cwsPath)) {
+      try {
+        const cwsDoc = IniDocument.parse(readText(cwsPath));
+        for (const s of [...cwsDoc.sections]) {
+          if (s.name.toLowerCase() === `custom build config 0001 ${target}`) {
+            cwsDoc.removeSection(s.name);
+          }
+        }
+        writeText(cwsPath, cwsDoc.toString());
+      } catch {}
+    }
   }
 
 

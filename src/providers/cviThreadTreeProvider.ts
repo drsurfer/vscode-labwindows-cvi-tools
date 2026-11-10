@@ -5,31 +5,52 @@ import { CviProcessDebugInfo, CviStackFrameInfo, CviThreadInfo, CviThreadTracker
 
 export type ThreadTreeNode = ProcessHeaderItem | ThreadTreeItem | StackFrameTreeItem | PlaceholderItem;
 
+function sparklineFromHistory(history: Array<{ time: number; cpuPercent: number }> = []): string {
+  if (!history || history.length === 0) return '';
+  const sparks = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const max = Math.max(...history.map((h) => h.cpuPercent || 0), 1);
+  return history
+    .slice(-10)
+    .map((h) => sparks[Math.min(sparks.length - 1, Math.floor(((h.cpuPercent || 0) / max) * (sparks.length - 1)))])
+    .join('');
+}
+
 export class ProcessHeaderItem extends vscode.TreeItem {
   constructor(public readonly info: CviProcessDebugInfo) {
     const label = `Process: ${info.processName || info.sessionName}`;
     super(label, vscode.TreeItemCollapsibleState.None);
 
     const pidText = info.processId ? `PID: ${info.processId}` : 'PID: active';
-    const cpuText = info.cpuPercent !== undefined ? ` | CPU: ${info.cpuPercent.toFixed(1)}%` : '';
+    const cpuVal = info.cpuPercent !== undefined ? `${info.cpuPercent.toFixed(1)}%` : '--%';
+    const spark = sparklineFromHistory(info.cpuHistory);
+    const cpuText = ` | CPU: ${cpuVal}${spark ? ` [${spark}]` : ''}`;
     this.description = `${pidText} — ${info.threads.length} threads${cpuText}`;
-    this.tooltip = `LabWindows/CVI Debugged Process\nSession: ${info.sessionName}\n${pidText}\nActive threads: ${info.threads.length}${cpuText}\nLast updated: ${info.updatedAt.toLocaleTimeString()}`;
+    this.tooltip = `LabWindows/CVI Debugged Process\nSession: ${info.sessionName}\n${pidText}\nActive threads: ${info.threads.length}${cpuText}\nClick to open live CPU Stripchart & diagnostics`;
     this.iconPath = new vscode.ThemeIcon('pulse');
     this.contextValue = 'cviProcessHeader';
+    this.command = {
+      command: 'labwindowsCvi.openCpuStripchart',
+      title: 'Open CPU Stripchart & Thread Diagnostics'
+    };
   }
 }
 
 export class ThreadTreeItem extends vscode.TreeItem {
   constructor(public readonly thread: CviThreadInfo) {
+    const tidPart = thread.osThreadId ? ` (TID ${thread.osThreadId})` : '';
     super(
-      `Thread ${thread.id}: ${thread.name}`,
+      `Thread #${thread.id}${tidPart}: ${thread.name}`,
       thread.frames.length > 0
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None
     );
 
-    this.description = `[${thread.roleLabel}] ${thread.status}`;
-    this.tooltip = `Thread #${thread.id}: ${thread.name}\nRole: ${thread.roleLabel}\nStatus: ${thread.status}\nTop location: ${thread.topFrame ? `${thread.topFrame.name} (${thread.topFrame.file || 'unknown'}:${thread.topFrame.line || 0})` : 'Running'}\nFrames captured: ${thread.frames.length}`;
+    const stateDesc = thread.state || (thread.topFrame ? 'Suspended' : 'Running');
+    const waitDesc = thread.waitReason ? ` (${thread.waitReason})` : '';
+    const prioDesc = thread.priority ? ` · ${thread.priority}` : '';
+    const cpuDesc = thread.cpuMs !== undefined ? ` · ${thread.cpuMs.toFixed(1)}ms` : '';
+    this.description = `[${thread.roleLabel}] ${stateDesc}${waitDesc}${prioDesc}${cpuDesc}`;
+    this.tooltip = `Thread #${thread.id}${tidPart}\nName: ${thread.name}\nRole: ${thread.roleLabel}\nState: ${stateDesc}${waitDesc}\nPriority: ${thread.priority || 'Normal'}\nCPU Time: ${thread.cpuMs !== undefined ? thread.cpuMs.toFixed(1) + ' ms' : 'N/A'}\nTop location: ${thread.topFrame ? `${thread.topFrame.name} (${thread.topFrame.file || 'unknown'}:${thread.topFrame.line || 0})` : 'Running'}\nFrames captured: ${thread.frames.length}`;
 
     switch (thread.role) {
       case 'main':

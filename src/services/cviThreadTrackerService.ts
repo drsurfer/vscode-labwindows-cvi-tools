@@ -1,6 +1,8 @@
 import * as cp from 'child_process';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { CviCpuStripchartPanel } from '../views/cviCpuStripchartPanel';
 
 export type CviThreadRole = 'main' | 'pool' | 'worker' | 'runtime';
 
@@ -14,10 +16,15 @@ export interface CviStackFrameInfo {
 
 export interface CviThreadInfo {
   id: number;
+  osThreadId?: number;
   name: string;
   role: CviThreadRole;
   roleLabel: string;
   status: string;
+  state?: string;
+  waitReason?: string;
+  priority?: string;
+  cpuMs?: number;
   topFrame?: CviStackFrameInfo;
   frames: CviStackFrameInfo[];
 }
@@ -28,6 +35,7 @@ export interface CviProcessDebugInfo {
   processName?: string;
   processId?: number;
   cpuPercent?: number;
+  cpuHistory?: Array<{ time: number; cpuPercent: number }>;
   threads: CviThreadInfo[];
   updatedAt: Date;
 }
@@ -42,11 +50,16 @@ export class CviThreadTrackerService implements vscode.Disposable {
   private isSampling = false;
   private lastCpuSample?: { time: number; totalCpuMs: number };
 
+  private workerProcess: cp.ChildProcessWithoutNullStreams | null = null;
+  private workerStdoutBuffer = '';
+  private historyBuffer: Array<{ time: number; cpuPercent: number }> = [];
+
   constructor(private readonly output: vscode.OutputChannel) {
     this.registerDebugLifecycle();
   }
 
   dispose(): void {
+    this.stopWorker();
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -60,6 +73,10 @@ export class CviThreadTrackerService implements vscode.Disposable {
 
   get isSessionActive(): boolean {
     return !!this.activeSession;
+  }
+
+  get cpuHistory(): Array<{ time: number; cpuPercent: number }> {
+    return [...this.historyBuffer];
   }
 
   private isCviSession(session: vscode.DebugSession): boolean {
@@ -85,11 +102,13 @@ export class CviThreadTrackerService implements vscode.Disposable {
       vscode.debug.onDidStartDebugSession((session) => {
         if (!this.isCviSession(session)) return;
         this.activeSession = session;
+        this.historyBuffer = [];
         this.currentProcessInfo = {
           sessionId: session.id,
           sessionName: session.name,
           processName: session.configuration?.program ? path.basename(session.configuration.program) : undefined,
           threads: [],
+          cpuHistory: [],
           updatedAt: new Date()
         };
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', true);
@@ -102,9 +121,11 @@ export class CviThreadTrackerService implements vscode.Disposable {
     this.disposables.push(
       vscode.debug.onDidTerminateDebugSession((session) => {
         if (this.activeSession?.id !== session.id) return;
+        this.stopWorker();
         this.activeSession = null;
         this.currentProcessInfo = null;
         this.lastCpuSample = undefined;
+        this.historyBuffer = [];
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', false);
         this._onDidChangeThreads.fire();
       })
@@ -123,6 +144,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
                   if (message.body.name) {
                     this.currentProcessInfo.processName = path.basename(message.body.name);
                   }
+                  this.startWorker(message.body.systemProcessId);
                   this._onDidChangeThreads.fire();
                 }
               } else if (
@@ -153,6 +175,169 @@ export class CviThreadTrackerService implements vscode.Disposable {
     this.disposables.push(vscode.debug.registerDebugAdapterTrackerFactory('cvi', trackerFactory));
   }
 
+  private startWorker(pid: number): void {
+    this.stopWorker();
+    this.historyBuffer = [];
+
+    const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+$targetPid = ${pid}
+$p = [System.Diagnostics.Process]::GetProcessById($targetPid)
+if (!$p) { exit }
+
+$numCores = [Environment]::ProcessorCount
+$prevCpu = $p.TotalProcessorTime.TotalMilliseconds
+$prevTime = [DateTime]::UtcNow
+
+while (!$p.HasExited) {
+    Start-Sleep -Milliseconds 1000
+    $p.Refresh()
+    $curTime = [DateTime]::UtcNow
+    $curCpu = $p.TotalProcessorTime.TotalMilliseconds
+    $timeDelta = ($curTime - $prevTime).TotalMilliseconds
+    $cpuDelta = $curCpu - $prevCpu
+    $pct = 0.0
+    if ($timeDelta -gt 0) {
+        $pct = [Math]::Round([Math]::Min(100.0, [Math]::Max(0.0, ($cpuDelta / ($timeDelta * $numCores)) * 100.0)), 1)
+    }
+    $prevCpu = $curCpu
+    $prevTime = $curTime
+
+    $threads = @()
+    foreach ($th in $p.Threads) {
+        $wr = ''
+        if ($th.ThreadState -eq [System.Diagnostics.ThreadState]::Wait) {
+            $wr = $th.WaitReason.ToString()
+        }
+        $threads += @{
+            id = $th.Id
+            state = $th.ThreadState.ToString()
+            waitReason = $wr
+            priority = $th.PriorityLevel.ToString()
+            cpuMs = [Math]::Round($th.TotalProcessorTime.TotalMilliseconds, 1)
+        }
+    }
+    $out = @{
+        pid = $targetPid
+        cpuPercent = $pct
+        timestamp = $curTime.ToString('o')
+        threads = $threads
+    }
+    [Console]::WriteLine(($out | ConvertTo-Json -Compress))
+}
+`;
+
+    try {
+      this.workerProcess = cp.spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '-'], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+
+      this.workerProcess.stdin.write(script);
+      this.workerProcess.stdin.end();
+
+      this.workerProcess.stdout.on('data', (chunk: Buffer) => {
+        this.workerStdoutBuffer += chunk.toString('utf8');
+        const lines = this.workerStdoutBuffer.split(/\r?\n/);
+        this.workerStdoutBuffer = lines.pop() || '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              const data = JSON.parse(trimmed);
+              this.onWorkerSample(data);
+            } catch {}
+          }
+        }
+      });
+
+      this.workerProcess.on('error', () => {
+        this.stopWorker();
+      });
+
+      this.workerProcess.on('exit', () => {
+        this.workerProcess = null;
+      });
+    } catch {
+      this.workerProcess = null;
+    }
+  }
+
+  private stopWorker(): void {
+    if (this.workerProcess) {
+      try {
+        this.workerProcess.kill();
+      } catch {}
+      this.workerProcess = null;
+    }
+    this.workerStdoutBuffer = '';
+  }
+
+  private onWorkerSample(data: {
+    pid: number;
+    cpuPercent: number;
+    timestamp: string;
+    threads: Array<{ id: number; state: string; waitReason: string; priority: string; cpuMs: number }>;
+  }): void {
+    if (!this.currentProcessInfo || this.currentProcessInfo.processId !== data.pid) {
+      return;
+    }
+
+    const now = Date.now();
+    this.currentProcessInfo.cpuPercent = data.cpuPercent;
+    this.historyBuffer.push({ time: now, cpuPercent: data.cpuPercent });
+    if (this.historyBuffer.length > 60) {
+      this.historyBuffer.shift();
+    }
+    this.currentProcessInfo.cpuHistory = [...this.historyBuffer];
+
+    const osThreads = Array.isArray(data.threads) ? data.threads : [];
+
+    if (this.currentProcessInfo.threads.length > 0) {
+      // Merge into existing DAP threads
+      for (const [idx, th] of this.currentProcessInfo.threads.entries()) {
+        const match = osThreads.find((ost) => ost.id === th.osThreadId)
+          ?? osThreads.find((ost) => th.name.includes(String(ost.id)))
+          ?? osThreads[idx];
+        if (match) {
+          th.osThreadId = match.id;
+          th.state = match.state;
+          th.waitReason = match.waitReason;
+          th.priority = match.priority;
+          th.cpuMs = match.cpuMs;
+        }
+      }
+    } else if (osThreads.length > 0) {
+      // Populate threads directly from OS telemetry during free-run
+      this.currentProcessInfo.threads = osThreads.map((ost, idx) => ({
+        id: idx + 1,
+        osThreadId: ost.id,
+        name: idx === 0 ? 'Main GUI Thread' : `Worker Thread #${idx + 1}`,
+        role: idx === 0 ? 'main' : 'worker',
+        roleLabel: idx === 0 ? 'Main GUI Thread' : 'Worker Thread',
+        status: ost.state === 'Wait' ? `Wait (${ost.waitReason || 'UserRequest'})` : 'Running',
+        state: ost.state,
+        waitReason: ost.waitReason,
+        priority: ost.priority,
+        cpuMs: ost.cpuMs,
+        frames: []
+      }));
+    }
+
+    this.currentProcessInfo.updatedAt = new Date();
+    this._onDidChangeThreads.fire();
+
+    if (CviCpuStripchartPanel.currentPanel) {
+      CviCpuStripchartPanel.currentPanel.updateData({
+        processName: this.currentProcessInfo.processName || 'CVI Process',
+        processId: this.currentProcessInfo.processId,
+        cpuPercent: this.currentProcessInfo.cpuPercent,
+        cpuHistory: this.currentProcessInfo.cpuHistory,
+        threads: this.currentProcessInfo.threads
+      });
+    }
+  }
+
   async refresh(): Promise<void> {
     if (!this.activeSession) return;
     const session = this.activeSession;
@@ -169,7 +354,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
       const rawThreads: Array<{ id: number; name: string }> = threadResp?.threads ?? [];
       const threads: CviThreadInfo[] = [];
 
-      for (const t of rawThreads) {
+      for (const [idx, t] of rawThreads.entries()) {
         let frames: CviStackFrameInfo[] = [];
         try {
           const stackResp = await session.customRequest('stackTrace', {
@@ -225,24 +410,24 @@ export class CviThreadTrackerService implements vscode.Disposable {
             : `Stopped at ${top.name}`;
         }
 
+        // Retain existing telemetry if available
+        const existing = this.currentProcessInfo?.threads.find((th) => th.id === t.id)
+          ?? this.currentProcessInfo?.threads[idx];
+
         threads.push({
           id: t.id,
+          osThreadId: existing?.osThreadId,
           name: t.name || `Thread #${t.id}`,
           role,
           roleLabel,
           status,
+          state: existing?.state || (top ? 'Suspended' : 'Running'),
+          waitReason: existing?.waitReason,
+          priority: existing?.priority || 'Normal',
+          cpuMs: existing?.cpuMs,
           topFrame: top,
           frames
         });
-      }
-
-      // Sample CPU if processId is known
-      let cpuPercent = this.currentProcessInfo?.cpuPercent;
-      if (this.currentProcessInfo?.processId) {
-        const sampled = await this.sampleProcessCpu(this.currentProcessInfo.processId);
-        if (sampled !== undefined) {
-          cpuPercent = sampled;
-        }
       }
 
       this.currentProcessInfo = {
@@ -252,8 +437,9 @@ export class CviThreadTrackerService implements vscode.Disposable {
           this.currentProcessInfo?.processName ||
           (session.configuration?.program ? path.basename(session.configuration.program) : undefined),
         processId: this.currentProcessInfo?.processId,
-        cpuPercent,
-        threads,
+        cpuPercent: this.currentProcessInfo?.cpuPercent,
+        cpuHistory: this.currentProcessInfo?.cpuHistory || [...this.historyBuffer],
+        threads: threads.length > 0 ? threads : (this.currentProcessInfo?.threads || []),
         updatedAt: new Date()
       };
 
@@ -273,38 +459,5 @@ export class CviThreadTrackerService implements vscode.Disposable {
     } catch (err) {
       vscode.window.showErrorMessage(`Unable to pause threads: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-
-  private async sampleProcessCpu(pid: number): Promise<number | undefined> {
-    return new Promise<number | undefined>((resolve) => {
-      // Lightweight Windows PowerShell query to get CPU (TotalProcessorTime seconds)
-      const cmd = `powershell -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).CPU"`;
-      cp.exec(cmd, { timeout: 1200 }, (err, stdout) => {
-        if (err || !stdout) {
-          resolve(undefined);
-          return;
-        }
-        const cpuSeconds = parseFloat(stdout.trim().replace(',', '.'));
-        if (isNaN(cpuSeconds)) {
-          resolve(undefined);
-          return;
-        }
-        const now = Date.now();
-        const totalCpuMs = cpuSeconds * 1000;
-        if (this.lastCpuSample) {
-          const deltaMs = now - this.lastCpuSample.time;
-          const cpuDelta = totalCpuMs - this.lastCpuSample.totalCpuMs;
-          if (deltaMs > 300 && cpuDelta >= 0) {
-            const numCores = navigator?.hardwareConcurrency || 4;
-            const pct = Math.min(100, Math.max(0, (cpuDelta / deltaMs / numCores) * 100));
-            this.lastCpuSample = { time: now, totalCpuMs };
-            resolve(Math.round(pct * 10) / 10);
-            return;
-          }
-        }
-        this.lastCpuSample = { time: now, totalCpuMs };
-        resolve(undefined);
-      });
-    });
   }
 }
