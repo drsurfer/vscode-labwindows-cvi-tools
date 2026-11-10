@@ -18,6 +18,8 @@ export class CviResourceTrackerService implements vscode.Disposable {
   private sessionExitedNaturally = false;
   private runtimeErrorDecorationType?: vscode.TextEditorDecorationType;
   private hasPendingRuntimeError = false;
+  private isPendingErrorFatal = false;
+  private pendingErrorMessage = '';
 
   constructor(
     private readonly output: vscode.OutputChannel
@@ -128,14 +130,23 @@ export class CviResourceTrackerService implements vscode.Disposable {
               }
               if (message.type === 'event' && message.event === 'output') {
                 const outText = message.body?.output ?? '';
+                const errorMatch = outText.match(/CVI Error:\s*([^\r\n]+)/);
+                if (errorMatch) {
+                  this.pendingErrorMessage = errorMatch[1].trim();
+                }
+
                 if (outText.includes('[LABWINDOWS/CVI FATAL RUN-TIME ERROR]')) {
                   this.hasPendingRuntimeError = true;
-                  this.output.appendLine('[CVI Runtime] 🛑 LabWindows/CVI FATAL Run-Time Error encountered! Execution halted.');
-                  void vscode.window.showErrorMessage('LabWindows/CVI FATAL Run-Time Error: Execution paused at fatal memory/pointer error. See Debug Console and source line.');
+                  this.isPendingErrorFatal = true;
+                  const detail = this.pendingErrorMessage ? `: ${this.pendingErrorMessage}` : '';
+                  this.output.appendLine(`[CVI Runtime] 🛑 LabWindows/CVI FATAL Run-Time Error encountered!${detail}`);
+                  void vscode.window.showErrorMessage(`LabWindows/CVI FATAL Run-Time Error${detail}`);
                 } else if (outText.includes('[LABWINDOWS/CVI RUN-TIME CHECK ERROR]')) {
                   this.hasPendingRuntimeError = true;
-                  this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Run-Time Check Error encountered! Execution paused.');
-                  void vscode.window.showWarningMessage('LabWindows/CVI Run-Time Check Error: Execution paused at failed run-time check (e.g. uninitialized variable or bounds check). See Debug Console and source line.');
+                  this.isPendingErrorFatal = false;
+                  const detail = this.pendingErrorMessage ? `: ${this.pendingErrorMessage}` : '';
+                  this.output.appendLine(`[CVI Runtime] ⚠️ LabWindows/CVI Run-Time Check Error encountered!${detail}`);
+                  void vscode.window.showWarningMessage(`LabWindows/CVI Run-Time Check${detail}`);
                 } else if (outText.includes('[LABWINDOWS/CVI LIBRARY ERROR]')) {
                   this.hasPendingRuntimeError = true;
                   this.output.appendLine('[CVI Runtime] ⚠️ LabWindows/CVI Library Error encountered! Execution paused.');
@@ -496,26 +507,36 @@ export class CviResourceTrackerService implements vscode.Disposable {
       const lineIdx = Math.max(0, lineNumber - 1);
       const lineRange = doc.lineAt(lineIdx).range;
 
-      if (!this.runtimeErrorDecorationType) {
-        this.runtimeErrorDecorationType = vscode.window.createTextEditorDecorationType({
-          backgroundColor: 'rgba(255, 68, 68, 0.25)',
-          isWholeLine: true,
-          border: '1px solid rgba(255, 68, 68, 0.7)',
-          overviewRulerColor: '#ff4444',
-          overviewRulerLane: vscode.OverviewRulerLane.Full,
-          after: {
-            contentText: '   ⚠️ [LabWindows/CVI Run-Time Error Check Failed]',
-            color: '#ff6b6b',
-            fontWeight: 'bold',
-            fontStyle: 'italic'
-          }
-        });
+      const badgeText = this.pendingErrorMessage
+        ? `   ${this.isPendingErrorFatal ? '🛑 [FATAL: ' : '⚠️ ['}${this.pendingErrorMessage}]`
+        : (this.isPendingErrorFatal ? '   🛑 [LabWindows/CVI FATAL Run-Time Error]' : '   ⚠️ [LabWindows/CVI Run-Time Error Check Failed]');
+
+      const hoverText = this.pendingErrorMessage
+        ? `**LabWindows/CVI ${this.isPendingErrorFatal ? 'FATAL ' : ''}Run-Time Error**\n\n> ⚠️ **${this.pendingErrorMessage}**\n\nExecution paused at this line. Inspect Call Stack and Variables in VS Code to analyze state.`
+        : '**LabWindows/CVI Run-Time Error**\n\nExecution paused at this line because a CVI Run-time check failed (e.g. uninitialized local variable, array bounds violation, or assertion).';
+
+      if (this.runtimeErrorDecorationType) {
+        this.runtimeErrorDecorationType.dispose();
       }
+
+      this.runtimeErrorDecorationType = vscode.window.createTextEditorDecorationType({
+        backgroundColor: this.isPendingErrorFatal ? 'rgba(255, 30, 30, 0.3)' : 'rgba(255, 68, 68, 0.25)',
+        isWholeLine: true,
+        border: this.isPendingErrorFatal ? '1px solid rgba(255, 30, 30, 0.9)' : '1px solid rgba(255, 68, 68, 0.7)',
+        overviewRulerColor: '#ff4444',
+        overviewRulerLane: vscode.OverviewRulerLane.Full,
+        after: {
+          contentText: badgeText,
+          color: this.isPendingErrorFatal ? '#ff4d4d' : '#ff6b6b',
+          fontWeight: 'bold',
+          fontStyle: 'italic'
+        }
+      });
 
       editor.setDecorations(this.runtimeErrorDecorationType, [
         {
           range: lineRange,
-          hoverMessage: new vscode.MarkdownString('**LabWindows/CVI Run-Time Error**\n\nExecution paused at this line because a CVI Run-time check failed (e.g. uninitialized local variable, array bounds violation, or assertion).')
+          hoverMessage: new vscode.MarkdownString(hoverText)
         }
       ]);
       editor.revealRange(lineRange, vscode.TextEditorRevealType.InCenter);
@@ -526,10 +547,14 @@ export class CviResourceTrackerService implements vscode.Disposable {
   }
 
   private clearRuntimeErrorDecoration(): void {
+    this.pendingErrorMessage = '';
+    this.isPendingErrorFatal = false;
     if (this.runtimeErrorDecorationType) {
       for (const editor of vscode.window.visibleTextEditors) {
         editor.setDecorations(this.runtimeErrorDecorationType, []);
       }
+      this.runtimeErrorDecorationType.dispose();
+      this.runtimeErrorDecorationType = undefined;
     }
   }
 
