@@ -21,7 +21,7 @@ export class CviCpuStripchartPanel {
 
     const panel = vscode.window.createWebviewPanel(
       CviCpuStripchartPanel.viewType,
-      'CVI CPU Stripchart & Diagnostics',
+      'Process Threads',
       column || vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -104,7 +104,7 @@ export class CviCpuStripchartPanel {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CVI CPU Stripchart & Thread Diagnostics</title>
+  <title>Process Threads</title>
   <style>
     :root {
       --bg: var(--vscode-editor-background, #1e1e1e);
@@ -221,6 +221,20 @@ export class CviCpuStripchartPanel {
       text-transform: uppercase;
       opacity: 0.8;
     }
+    th.sortable {
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s ease;
+    }
+    th.sortable:hover {
+      background: rgba(128, 128, 128, 0.18);
+    }
+    .sort-icon {
+      display: inline-block;
+      margin-left: 4px;
+      font-size: 10px;
+      opacity: 0.8;
+    }
     td {
       padding: 8px 12px;
       border-bottom: 1px solid rgba(128, 128, 128, 0.1);
@@ -254,7 +268,6 @@ export class CviCpuStripchartPanel {
     <div class="title-group">
       <h1 id="procTitle">LabWindows/CVI Diagnostics</h1>
       <span id="procPid" class="pill">PID: Waiting</span>
-      <span id="ratePill" class="pill">1 Hz Continuous</span>
     </div>
     <div class="metrics">
       <div class="metric-card">
@@ -274,8 +287,7 @@ export class CviCpuStripchartPanel {
 
   <div class="chart-container">
     <div class="chart-header">
-      <span>CPU Usage Stripchart (Fixed 0% Base, Dynamic Y Autoscale)</span>
-      <span id="yScaleLabel">Scale: 0% – 100%</span>
+      <span>CPU Usage</span>
     </div>
     <canvas id="stripchartCanvas"></canvas>
   </div>
@@ -288,19 +300,20 @@ export class CviCpuStripchartPanel {
     <table id="threadsTable">
       <thead>
         <tr>
-          <th>OS TID</th>
-          <th>DAP ID</th>
-          <th>Role / Label</th>
-          <th>State</th>
-          <th>Wait Reason</th>
-          <th>Priority</th>
-          <th>CPU Time</th>
-          <th>Call Stack Location</th>
+          <th class="sortable" data-col="id"># <span class="sort-icon" id="sort-id"></span></th>
+          <th class="sortable" data-col="osThreadId">TID <span class="sort-icon" id="sort-osThreadId"></span></th>
+          <th class="sortable" data-col="name">Name <span class="sort-icon" id="sort-name"></span></th>
+          <th class="sortable" data-col="entryPoint">Entry Point <span class="sort-icon" id="sort-entryPoint"></span></th>
+          <th class="sortable" data-col="state">Status <span class="sort-icon" id="sort-state"></span></th>
+          <th class="sortable" data-col="waitReason">Reason <span class="sort-icon" id="sort-waitReason"></span></th>
+          <th class="sortable" data-col="priority">Priority <span class="sort-icon" id="sort-priority"></span></th>
+          <th class="sortable" data-col="cpuMs">CPU Time <span class="sort-icon" id="sort-cpuMs"></span></th>
+          <th class="sortable" data-col="location">Location <span class="sort-icon" id="sort-location"></span></th>
         </tr>
       </thead>
       <tbody id="threadsBody">
         <tr>
-          <td colspan="8" class="empty-msg">Waiting for CVI debug session telemetry…</td>
+          <td colspan="9" class="empty-msg">Waiting for CVI debug session telemetry…</td>
         </tr>
       </tbody>
     </table>
@@ -315,12 +328,14 @@ export class CviCpuStripchartPanel {
     const valCurrent = document.getElementById('valCurrent');
     const valPeak = document.getElementById('valPeak');
     const valAvg = document.getElementById('valAvg');
-    const yScaleLabel = document.getElementById('yScaleLabel');
     const threadCountBadge = document.getElementById('threadCountBadge');
     const threadsBody = document.getElementById('threadsBody');
 
     let historyData = [];
     let resizeTimer = null;
+    let currentSortCol = 'id';
+    let currentSortAsc = true;
+    let latestThreads = [];
 
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
@@ -358,7 +373,6 @@ export class CviCpuStripchartPanel {
         const peak = Math.max(...historyData.map(d => d.cpuPercent || 0));
         maxVal = Math.max(10, Math.ceil(peak * 1.25 / 10) * 10);
       }
-      yScaleLabel.textContent = \`Scale: 0% – \${maxVal}%\`;
 
       // Draw Grid Lines & Y Axis Labels
       ctx.font = '10px monospace';
@@ -411,7 +425,6 @@ export class CviCpuStripchartPanel {
       const points = [];
 
       for (let i = 0; i < count; i++) {
-        // Place samples across 60 seconds rolling window ending at plotWidth
         const indexFromRight = count - 1 - i;
         const x = paddingLeft + plotWidth - (indexFromRight / (maxSamples - 1)) * plotWidth;
         const cpu = Math.max(0, Math.min(maxVal, historyData[i].cpuPercent || 0));
@@ -455,26 +468,89 @@ export class CviCpuStripchartPanel {
       ctx.stroke();
     }
 
+    function getThreadVal(t, col) {
+      switch (col) {
+        case 'id': return t.id ?? 0;
+        case 'osThreadId': return t.osThreadId ? parseInt(t.osThreadId, 10) || 0 : 0;
+        case 'name': return (t.role === 'main' ? 'Main GUI Thread' : (t.name || 'Thread')).toLowerCase();
+        case 'entryPoint': return (t.entryPoint || '').toLowerCase();
+        case 'state': return (t.state || 'Running').toLowerCase();
+        case 'waitReason': return (t.waitReason || '').toLowerCase();
+        case 'priority': {
+          const prioOrder = { 'idle': 0, 'lowest': 1, 'below normal': 2, 'normal': 3, 'above normal': 4, 'highest': 5, 'time critical': 6 };
+          const p = (t.priority || 'Normal').toLowerCase();
+          return prioOrder[p] !== undefined ? prioOrder[p] : 3;
+        }
+        case 'cpuMs': return t.cpuMs !== undefined ? t.cpuMs : -1;
+        case 'location': {
+          return t.topFrame ? (t.topFrame.name || '').toLowerCase() : '';
+        }
+        default: return '';
+      }
+    }
+
+    function sortThreads(threads) {
+      if (!threads || threads.length === 0) return [];
+      const list = threads.slice();
+      list.sort((a, b) => {
+        const valA = getThreadVal(a, currentSortCol);
+        const valB = getThreadVal(b, currentSortCol);
+        if (valA < valB) return currentSortAsc ? -1 : 1;
+        if (valA > valB) return currentSortAsc ? 1 : -1;
+        return (a.id || 0) - (b.id || 0);
+      });
+      return list;
+    }
+
+    function updateSortIcons() {
+      document.querySelectorAll('.sort-icon').forEach(span => {
+        span.textContent = '';
+      });
+      const icon = document.getElementById('sort-' + currentSortCol);
+      if (icon) {
+        icon.textContent = currentSortAsc ? '▲' : '▼';
+      }
+    }
+
+    document.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.getAttribute('data-col');
+        if (currentSortCol === col) {
+          currentSortAsc = !currentSortAsc;
+        } else {
+          currentSortCol = col;
+          currentSortAsc = true;
+        }
+        updateSortIcons();
+        renderThreads(latestThreads);
+      });
+    });
+
     function renderThreads(threads) {
-      if (!threads || threads.length === 0) {
-        threadsBody.innerHTML = '<tr><td colspan="8" class="empty-msg">No active threads detected.</td></tr>';
+      latestThreads = threads || [];
+      if (!latestThreads || latestThreads.length === 0) {
+        threadsBody.innerHTML = '<tr><td colspan="9" class="empty-msg">No active threads detected.</td></tr>';
         threadCountBadge.textContent = '0 Threads';
         return;
       }
 
-      threadCountBadge.textContent = \`\${threads.length} Thread\${threads.length === 1 ? '' : 's'}\`;
+      threadCountBadge.textContent = \`\${latestThreads.length} Thread\${latestThreads.length === 1 ? '' : 's'}\`;
+      const sorted = sortThreads(latestThreads);
       let html = '';
 
-      for (const t of threads) {
+      for (const t of sorted) {
         const stateClass = t.state === 'Running' ? 'badge-running' : (t.state === 'Wait' ? 'badge-wait' : 'badge-suspended');
         const loc = t.topFrame ? \`\${t.topFrame.name} (\${t.topFrame.file ? t.topFrame.file.split(/[\\\\/]/).pop() : 'unknown'}:\${t.topFrame.line || 0})\` : (t.status || 'Running');
+        const entry = t.entryPoint || '-';
+        const nameText = t.role === 'main' ? 'Main GUI Thread' : (t.name || 'Thread');
 
         html += \`<tr>
-          <td class="mono">\${t.osThreadId || '-'}</td>
           <td>#\${t.id}</td>
-          <td><strong>\${escapeHtml(t.roleLabel || t.name)}</strong></td>
+          <td class="mono">\${t.osThreadId || '-'}</td>
+          <td><strong>\${escapeHtml(nameText)}</strong></td>
+          <td class="mono" title="\${escapeHtml(entry)}">\${escapeHtml(entry)}</td>
           <td><span class="badge \${stateClass}">\${escapeHtml(t.state || 'Running')}</span></td>
-          <td>\${escapeHtml(t.waitReason || 'None')}</td>
+          <td>\${escapeHtml(t.waitReason || '-')}</td>
           <td>\${escapeHtml(t.priority || 'Normal')}</td>
           <td class="mono">\${t.cpuMs !== undefined ? t.cpuMs.toFixed(1) + ' ms' : '-'}</td>
           <td title="\${escapeHtml(loc)}">\${escapeHtml(loc)}</td>
@@ -514,6 +590,7 @@ export class CviCpuStripchartPanel {
       }
     });
 
+    updateSortIcons();
     setTimeout(resizeCanvas, 50);
     vscodeApi.postMessage({ type: 'ready' });
   </script>

@@ -1,5 +1,5 @@
 import * as cp from 'child_process';
-import * as os from 'os';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CviCpuStripchartPanel } from '../views/cviCpuStripchartPanel';
@@ -25,6 +25,8 @@ export interface CviThreadInfo {
   waitReason?: string;
   priority?: string;
   cpuMs?: number;
+  entryPoint?: string;
+  module?: string;
   topFrame?: CviStackFrameInfo;
   frames: CviStackFrameInfo[];
 }
@@ -47,9 +49,8 @@ export class CviThreadTrackerService implements vscode.Disposable {
   private currentProcessInfo: CviProcessDebugInfo | null = null;
   private activeSession: vscode.DebugSession | null = null;
   private disposables: vscode.Disposable[] = [];
-  private pollTimer: NodeJS.Timeout | null = null;
-  private isSampling = false;
-  private lastCpuSample?: { time: number; cpuMs: number };
+  private helperProcess: cp.ChildProcess | null = null;
+  private helperStdoutBuffer = '';
   private historyBuffer: Array<{ time: number; cpuPercent: number }> = [];
 
   constructor(private readonly output: vscode.OutputChannel) {
@@ -57,7 +58,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
   }
 
   dispose(): void {
-    this.stopPollingTimer();
+    this.stopNativeTelemetry();
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -101,7 +102,6 @@ export class CviThreadTrackerService implements vscode.Disposable {
         if (!this.isCviSession(session)) return;
         this.activeSession = session;
         this.historyBuffer = [];
-        this.lastCpuSample = undefined;
 
         const program = session.configuration?.program as string | undefined;
         const procName = program ? path.basename(program, path.extname(program)) : undefined;
@@ -117,7 +117,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
 
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', true);
         this._onDidChangeThreads.fire();
-        this.startPollingTimer();
+        this.startNativeTelemetry();
       })
     );
 
@@ -125,10 +125,9 @@ export class CviThreadTrackerService implements vscode.Disposable {
     this.disposables.push(
       vscode.debug.onDidTerminateDebugSession((session) => {
         if (this.activeSession?.id !== session.id) return;
-        this.stopPollingTimer();
+        this.stopNativeTelemetry();
         this.activeSession = null;
         this.currentProcessInfo = null;
-        this.lastCpuSample = undefined;
         this.historyBuffer = [];
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', false);
         this._onDidChangeThreads.fire();
@@ -141,7 +140,13 @@ export class CviThreadTrackerService implements vscode.Disposable {
         if (!this.isCviSession(session)) return undefined;
         return {
           onDidSendMessage: (message: any) => {
-            if (message.type === 'event') {
+            if (message.type === 'response' && message.command === 'initialize') {
+              // Hide VS Code's empty built-in "Memory" view in the Debug sidebar
+              if (message.body) {
+                message.body.supportsReadMemoryRequest = false;
+                message.body.supportsWriteMemoryRequest = false;
+              }
+            } else if (message.type === 'event') {
               if (message.event === 'process' && message.body?.systemProcessId) {
                 if (this.currentProcessInfo) {
                   this.currentProcessInfo.processId = message.body.systemProcessId;
@@ -149,6 +154,9 @@ export class CviThreadTrackerService implements vscode.Disposable {
                     this.currentProcessInfo.processName = path.basename(message.body.name, path.extname(message.body.name));
                   }
                   this._onDidChangeThreads.fire();
+                  if (!this.helperProcess) {
+                    this.startNativeTelemetry();
+                  }
                 }
               } else if (
                 message.event === 'stopped' ||
@@ -166,168 +174,139 @@ export class CviThreadTrackerService implements vscode.Disposable {
     this.disposables.push(vscode.debug.registerDebugAdapterTrackerFactory('cvi', trackerFactory));
   }
 
-  private startPollingTimer(): void {
-    this.stopPollingTimer();
-    // Fire immediately
-    void this.sampleTelemetry();
-    // Continuous 1 Hz sampling
-    this.pollTimer = setInterval(() => {
-      void this.sampleTelemetry();
-    }, 1000);
-  }
+  private startNativeTelemetry(): void {
+    this.stopNativeTelemetry();
 
-  private stopPollingTimer(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-    this.isSampling = false;
-  }
+    const enabled = vscode.workspace.getConfiguration('labwindowsCvi').get<boolean>('debug.enableTelemetry', true);
+    if (!enabled || !this.currentProcessInfo) return;
 
-  private async sampleTelemetry(): Promise<void> {
-    if (!this.activeSession || !this.currentProcessInfo || this.isSampling) {
+    // Locate helper executable in bin/
+    const helperPath = path.resolve(__dirname, '..', '..', 'bin', 'cvi_telemetry.exe');
+    if (!fs.existsSync(helperPath)) {
+      this.output.appendLine(`[CVI Telemetry] Native helper not found at: ${helperPath}`);
       return;
     }
-    this.isSampling = true;
 
-    const targetPid = this.currentProcessInfo.processId || 0;
-    const procName = this.currentProcessInfo.processName || '';
-    const cleanProcName = procName.replace(/['"\\]/g, '');
+    const target = this.currentProcessInfo.processId
+      ? String(this.currentProcessInfo.processId)
+      : (this.currentProcessInfo.processName ? `${this.currentProcessInfo.processName}.exe` : '');
 
-    // Robust PowerShell telemetry query executed via Base64 UTF-16LE EncodedCommand
-    const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-$targetPid = ${targetPid}
-if ($targetPid -le 0) {
-  $p = Get-Process -Name '${cleanProcName}' -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1
-} else {
-  $p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
-}
-if (!$p -or $p.HasExited) { exit }
+    if (!target) return;
 
-$tList = @()
-foreach ($th in $p.Threads) {
-  $wr = if ($th.ThreadState -eq [System.Diagnostics.ThreadState]::Wait) { [string]$th.WaitReason } else { '' }
-  $tList += @{
-    id = $th.Id
-    state = [string]$th.ThreadState
-    waitReason = $wr
-    priority = [string]$th.PriorityLevel
-    cpuMs = [math]::Round($th.TotalProcessorTime.TotalMilliseconds, 1)
+    const interval = vscode.workspace.getConfiguration('labwindowsCvi').get<number>('debug.telemetryIntervalMs', 1000);
+
+    try {
+      this.helperProcess = cp.spawn(helperPath, [target, String(interval)], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true
+      });
+
+      this.helperStdoutBuffer = '';
+
+      this.helperProcess.stdout?.on('data', (chunk: Buffer) => {
+        this.helperStdoutBuffer += chunk.toString('utf8');
+        const lines = this.helperStdoutBuffer.split(/\r?\n/);
+        this.helperStdoutBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            try {
+              const data = JSON.parse(trimmed);
+              this.onTelemetryData(data);
+            } catch {}
+          }
+        }
+      });
+
+      this.helperProcess.on('exit', () => {
+        this.helperProcess = null;
+      });
+      this.helperProcess.on('error', (err) => {
+        this.output.appendLine(`[CVI Telemetry] Native helper error: ${err.message}`);
+        this.helperProcess = null;
+      });
+    } catch (err: any) {
+      this.output.appendLine(`[CVI Telemetry] Failed to spawn helper: ${err?.message || err}`);
+    }
   }
-}
-[PSCustomObject]@{
-  pid = $p.Id
-  processName = $p.ProcessName
-  cpuMs = [math]::Round($p.TotalProcessorTime.TotalMilliseconds, 1)
-  threads = $tList
-} | ConvertTo-Json -Compress
-`;
 
-    const b64 = Buffer.from(script, 'utf16le').toString('base64');
+  private stopNativeTelemetry(): void {
+    if (this.helperProcess) {
+      try {
+        this.helperProcess.kill();
+      } catch {}
+      this.helperProcess = null;
+    }
+    this.helperStdoutBuffer = '';
+  }
 
-    cp.execFile(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', b64],
-      { windowsHide: true, timeout: 3500 },
-      (err, stdout) => {
-        this.isSampling = false;
-        if (err || !stdout || !this.activeSession || !this.currentProcessInfo) {
-          return;
-        }
+  private onTelemetryData(data: {
+    pid: number;
+    cpuPercent: number;
+    cpuMs: number;
+    threads: Array<{ id: number; priority: string; cpuMs: number; entryPoint: string; module?: string }>;
+  }): void {
+    if (!this.currentProcessInfo || !this.activeSession) return;
 
-        try {
-          const raw = stdout.trim();
-          if (!raw.startsWith('{') || !raw.endsWith('}')) {
-            return;
-          }
-          const data = JSON.parse(raw);
-          if (!data || !data.pid) {
-            return;
-          }
+    this.currentProcessInfo.processId = data.pid;
+    this.currentProcessInfo.cpuPercent = data.cpuPercent;
 
-          this.currentProcessInfo.processId = data.pid;
-          if (!this.currentProcessInfo.processName && data.processName) {
-            this.currentProcessInfo.processName = data.processName;
-          }
+    const now = Date.now();
+    this.historyBuffer.push({ time: now, cpuPercent: data.cpuPercent });
+    if (this.historyBuffer.length > 60) {
+      this.historyBuffer.shift();
+    }
+    this.currentProcessInfo.cpuHistory = [...this.historyBuffer];
 
-          // Calculate rolling CPU % across all CPU cores
-          const now = Date.now();
-          let cpuPercent = 0.0;
-          if (this.lastCpuSample && this.lastCpuSample.time < now) {
-            const timeDelta = now - this.lastCpuSample.time;
-            const cpuDelta = data.cpuMs - this.lastCpuSample.cpuMs;
-            const numCores = os.cpus().length || 1;
-            if (timeDelta > 0 && cpuDelta >= 0) {
-              cpuPercent = Math.min(100.0, Math.max(0.0, (cpuDelta / (timeDelta * numCores)) * 100.0));
-              cpuPercent = Math.round(cpuPercent * 10) / 10;
-            }
-          }
-          this.lastCpuSample = { time: now, cpuMs: data.cpuMs };
-          this.currentProcessInfo.cpuPercent = cpuPercent;
+    const osThreads = Array.isArray(data.threads) ? data.threads : [];
+    const existing = this.currentProcessInfo.threads || [];
+    const updatedThreads: CviThreadInfo[] = [];
 
-          this.historyBuffer.push({ time: now, cpuPercent });
-          if (this.historyBuffer.length > 60) {
-            this.historyBuffer.shift();
-          }
-          this.currentProcessInfo.cpuHistory = [...this.historyBuffer];
+    for (let i = 0; i < osThreads.length; i++) {
+      const ost = osThreads[i];
+      const match = existing.find((et) => et.osThreadId === ost.id)
+        ?? (existing[i] && !existing[i].osThreadId ? existing[i] : undefined);
 
-          // Map OS thread data to CviThreadInfo
-          const osThreads: Array<{ id: number; state: string; waitReason: string; priority: string; cpuMs: number }> =
-            Array.isArray(data.threads) ? data.threads : [];
+      const isMain = i === 0;
+      const isCviRuntime = ost.module && /cvirte/i.test(ost.module);
+      const role: CviThreadRole = match?.role ?? (isMain ? 'main' : (isCviRuntime ? 'runtime' : 'worker'));
+      const roleLabel: string = match?.roleLabel ?? (isMain ? 'Main GUI Thread' : (isCviRuntime ? 'CVI Runtime' : 'Worker Thread'));
+      const name: string = isMain
+        ? 'Main GUI Thread'
+        : (ost.entryPoint && ost.entryPoint !== '-' ? ost.entryPoint : (ost.module ? `${ost.module} Thread` : `Thread #${ost.id}`));
 
-          const existingThreads = this.currentProcessInfo.threads || [];
-          const updatedThreads: CviThreadInfo[] = [];
+      updatedThreads.push({
+        id: match?.id ?? (i + 1),
+        osThreadId: ost.id,
+        name,
+        role,
+        roleLabel,
+        status: 'Active',
+        state: 'Active',
+        priority: ost.priority || 'Normal',
+        cpuMs: ost.cpuMs,
+        entryPoint: ost.entryPoint,
+        module: ost.module,
+        topFrame: match?.topFrame,
+        frames: match?.frames || []
+      });
+    }
 
-          for (let i = 0; i < osThreads.length; i++) {
-            const ost = osThreads[i];
-            const match = existingThreads.find((et) => et.osThreadId === ost.id)
-              ?? (existingThreads[i] && !existingThreads[i].osThreadId ? existingThreads[i] : undefined);
+    this.currentProcessInfo.threads = updatedThreads;
+    this.currentProcessInfo.updatedAt = new Date();
 
-            const isMain = i === 0;
-            const role: CviThreadRole = match?.role ?? (isMain ? 'main' : 'worker');
-            const roleLabel: string = match?.roleLabel ?? (isMain ? 'Main GUI Thread' : `Worker Thread #${i + 1}`);
-            const state = ost.state || 'Running';
-            const waitReason = ost.waitReason || '';
-            const status = state === 'Wait' ? `Wait (${waitReason || 'UserRequest'})` : state;
+    this._onDidChangeThreads.fire();
 
-            updatedThreads.push({
-              id: match?.id ?? (i + 1),
-              osThreadId: ost.id,
-              name: match?.name ?? (isMain ? 'Main GUI Thread' : `Worker Thread #${i + 1}`),
-              role,
-              roleLabel,
-              status,
-              state,
-              waitReason,
-              priority: ost.priority || 'Normal',
-              cpuMs: ost.cpuMs,
-              topFrame: match?.topFrame,
-              frames: match?.frames || []
-            });
-          }
-
-          this.currentProcessInfo.threads = updatedThreads;
-          this.currentProcessInfo.updatedAt = new Date();
-
-          // Continuous 1 Hz update for sidebar tree view
-          this._onDidChangeThreads.fire();
-
-          // Continuous 1 Hz update for CPU stripchart webview if open
-          if (CviCpuStripchartPanel.currentPanel) {
-            CviCpuStripchartPanel.currentPanel.updateData({
-              processName: this.currentProcessInfo.processName || 'CVI Process',
-              processId: this.currentProcessInfo.processId,
-              cpuPercent: this.currentProcessInfo.cpuPercent,
-              cpuHistory: this.currentProcessInfo.cpuHistory,
-              threads: this.currentProcessInfo.threads
-            });
-          }
-        } catch {
-          // Ignore JSON parse errors from transient process transitions
-        }
-      }
-    );
+    if (CviCpuStripchartPanel.currentPanel) {
+      CviCpuStripchartPanel.currentPanel.updateData({
+        processName: this.currentProcessInfo.processName || 'CVI Process',
+        processId: this.currentProcessInfo.processId,
+        cpuPercent: this.currentProcessInfo.cpuPercent,
+        cpuHistory: this.currentProcessInfo.cpuHistory,
+        threads: this.currentProcessInfo.threads
+      });
+    }
   }
 
   private async captureDapStackFrames(): Promise<void> {
@@ -368,25 +347,6 @@ foreach ($th in $p.Threads) {
             if (targetThread) {
               targetThread.frames = frames;
               targetThread.topFrame = frames[0];
-              if (frames.length > 0) {
-                const hasCmtPool = frames.some((f) =>
-                  /Cmt|ThreadPool|CmtScheduleThreadPoolFunction|__Cmt|PoolFunc/i.test(f.name)
-                );
-                const hasCviRuntime = frames.some(
-                  (f) =>
-                    /cvirte|cvi_run|cviruntime/i.test(f.name) ||
-                    (f.file && /cvirte|cviauto|toolbox/i.test(f.file))
-                );
-                if (targetThread.role !== 'main') {
-                  if (hasCmtPool) {
-                    targetThread.role = 'pool';
-                    targetThread.roleLabel = 'CVI Thread Pool Worker';
-                  } else if (hasCviRuntime) {
-                    targetThread.role = 'runtime';
-                    targetThread.roleLabel = 'CVI Runtime Internal';
-                  }
-                }
-              }
             }
           }
         } catch {
@@ -401,7 +361,9 @@ foreach ($th in $p.Threads) {
   }
 
   async refresh(): Promise<void> {
-    await this.sampleTelemetry();
+    if (!this.helperProcess) {
+      this.startNativeTelemetry();
+    }
     await this.captureDapStackFrames();
   }
 

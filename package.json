@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.20",
+  "version": "0.0.21",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -47,8 +47,8 @@
         },
         {
           "id": "labwindowsCvi.quickActions",
-          "name": "CVI Actions",
-          "contextualTitle": "CVI Actions",
+          "name": "Actions",
+          "contextualTitle": "Actions",
           "visibility": "visible",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": false
@@ -62,8 +62,8 @@
         },
         {
           "id": "labwindowsCvi.libraryExplorer",
-          "name": "CVI Libraries",
-          "contextualTitle": "CVI Libraries",
+          "name": "Libraries",
+          "contextualTitle": "Libraries",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
@@ -71,15 +71,15 @@
       "debug": [
         {
           "id": "labwindowsCvi.resourceTracking",
-          "name": "CVI Resource Tracking",
-          "contextualTitle": "LabWindows/CVI Resources",
+          "name": "Resource Tracking",
+          "contextualTitle": "Resource Tracking",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         },
         {
           "id": "labwindowsCvi.processThreads",
-          "name": "CVI Process Threads",
-          "contextualTitle": "LabWindows/CVI Process Threads",
+          "name": "Process Threads",
+          "contextualTitle": "Process Threads",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
@@ -1991,6 +1991,16 @@
           "type": "boolean",
           "default": false,
           "description": "Automatically query and update CVI resource tracking when paused at a breakpoint. Disabled by default to prevent inferior-call thread collisions in multi-threaded programs (manual Refresh remains available)."
+        },
+        "labwindowsCvi.debug.enableTelemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable lightweight native process CPU and thread telemetry during debugging using the low-overhead C helper."
+        },
+        "labwindowsCvi.debug.telemetryIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "description": "Polling interval in milliseconds for process and thread telemetry helper (default: 1000 ms)."
         },
         "labwindowsCvi.debug.breakOnRuntimeErrors": {
           "type": "boolean",
