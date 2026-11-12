@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.22",
+  "version": "0.0.23",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -78,8 +78,8 @@
         },
         {
           "id": "labwindowsCvi.processThreads",
-          "name": "Process Threads",
-          "contextualTitle": "Process Threads",
+          "name": "Process Threads [Experimental]",
+          "contextualTitle": "Process Threads [Experimental]",
           "icon": "media/cvi-tools.svg",
           "showCollapseAll": true
         }
@@ -781,7 +781,7 @@
       },
       {
         "command": "labwindowsCvi.openCpuStripchart",
-        "title": "Open CPU Stripchart & Thread Diagnostics",
+        "title": "Open Process Threads [Experimental]",
         "icon": "$(pulse)",
         "category": "LabWindows/CVI"
       },

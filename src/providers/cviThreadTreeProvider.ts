@@ -13,12 +13,12 @@ export class ProcessHeaderItem extends vscode.TreeItem {
     const pidText = info.processId ? `PID: ${info.processId}` : 'PID: active';
     const cpuVal = info.cpuPercent !== undefined ? `${info.cpuPercent.toFixed(1)}%` : '--%';
     this.description = `${pidText} — ${info.threads.length} threads | CPU: ${cpuVal}`;
-    this.tooltip = `LabWindows/CVI Debugged Process\nSession: ${info.sessionName}\n${pidText}\nActive threads: ${info.threads.length}\nCPU Usage: ${cpuVal}\nClick to open live CPU stripchart and thread diagnostics`;
+    this.tooltip = `LabWindows/CVI Debugged Process\nSession: ${info.sessionName}\n${pidText}\nActive threads: ${info.threads.length}\nCPU Usage: ${cpuVal}\nClick to open Process Threads [Experimental]`;
     this.iconPath = new vscode.ThemeIcon('pulse');
     this.contextValue = 'cviProcessHeader';
     this.command = {
       command: 'labwindowsCvi.openCpuStripchart',
-      title: 'Open CPU Stripchart & Thread Diagnostics'
+      title: 'Open Process Threads [Experimental]'
     };
   }
 }

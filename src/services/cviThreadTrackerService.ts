@@ -118,6 +118,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', true);
         this._onDidChangeThreads.fire();
         this.startNativeTelemetry();
+        CviCpuStripchartPanel.currentPanel?.setSessionActive(true);
       })
     );
 
@@ -131,6 +132,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
         this.historyBuffer = [];
         void vscode.commands.executeCommand('setContext', 'labwindowsCvi.hasActiveDebugSession', false);
         this._onDidChangeThreads.fire();
+        CviCpuStripchartPanel.currentPanel?.setSessionActive(false);
       })
     );
 
@@ -167,7 +169,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
                     delete message.body.text;
                   }
                 }
-                void this.onTargetStopped(message.body?.threadId);
+                this.onTargetStopped(message.body?.threadId);
               } else if (message.event === 'continued' || message.event === 'thread') {
                 void this.captureDapStackFrames();
               }
@@ -282,7 +284,6 @@ export class CviThreadTrackerService implements vscode.Disposable {
       const role: CviThreadRole = match?.role ?? (isMain ? 'main' : (isCviRuntime ? 'runtime' : 'worker'));
       const roleLabel: string = match?.roleLabel ?? (isMain ? 'Main GUI Thread' : (isCviRuntime ? 'CVI Runtime' : 'Worker Thread'));
 
-      // If cannot give meaningful name, use Thread #ID instead of duplicating entry point
       const name: string = isMain
         ? 'Main GUI Thread'
         : `Thread #${match?.id ?? (i + 1)}`;
@@ -305,19 +306,18 @@ export class CviThreadTrackerService implements vscode.Disposable {
       });
     }
 
-    // Only fire _onDidChangeThreads when there is a structural change or thread state change.
-    // This prevents destroying sidebar tree items at 1 Hz so user hover tooltips remain open!
-    const hasStructuralChange =
-      existing.length !== updatedThreads.length ||
-      updatedThreads.some((ut, idx) => {
-        const et = existing[idx];
-        return !et || et.id !== ut.id || et.osThreadId !== ut.osThreadId || et.state !== ut.state || et.waitReason !== ut.waitReason;
-      });
+    // Freeze sidebar tree items during normal 1 Hz ticks so hover tooltips NEVER get destroyed!
+    // Only fire when thread count changes, or when a thread is suspended / resumed.
+    const threadCountChanged = existing.length !== updatedThreads.length;
+    const suspendStateChanged = updatedThreads.some((ut, idx) => {
+      const et = existing[idx];
+      return !et || (et.state === 'Suspended') !== (ut.state === 'Suspended');
+    });
 
     this.currentProcessInfo.threads = updatedThreads;
     this.currentProcessInfo.updatedAt = new Date();
 
-    if (hasStructuralChange) {
+    if (threadCountChanged || suspendStateChanged) {
       this._onDidChangeThreads.fire();
     }
 
@@ -332,35 +332,148 @@ export class CviThreadTrackerService implements vscode.Disposable {
     }
   }
 
-  private async onTargetStopped(threadId?: number): Promise<void> {
-    await this.captureDapStackFrames();
+  private onTargetStopped(threadId?: number): void {
+    setTimeout(() => {
+      void this.navigateAndCaptureOnStop(threadId);
+    }, 150);
+  }
 
-    // Auto-navigate to highest user source frame if stopped inside Windows DLL
+  private async navigateAndCaptureOnStop(stoppedThreadId?: number): Promise<void> {
     if (!this.activeSession || !this.currentProcessInfo) return;
-    try {
-      const targetThread = threadId
-        ? this.currentProcessInfo.threads.find(t => t.id === threadId || t.osThreadId === threadId)
-        : this.currentProcessInfo.threads[0];
+    const session = this.activeSession;
 
-      if (targetThread && targetThread.frames.length > 0) {
-        const top = targetThread.frames[0];
-        const topHasSource = top.file && fs.existsSync(top.file);
-        if (!topHasSource) {
-          const userFrame = targetThread.frames.find(f => f.file && fs.existsSync(f.file));
-          if (userFrame && userFrame.file && typeof userFrame.line === 'number') {
-            const doc = await vscode.workspace.openTextDocument(userFrame.file);
-            const line = Math.max(0, userFrame.line - 1);
-            const col = Math.max(0, (userFrame.column || 1) - 1);
-            await vscode.window.showTextDocument(doc, {
-              selection: new vscode.Range(line, col, line, col),
-              preserveFocus: false
-            });
+    try {
+      let threadResp: any = null;
+      try {
+        threadResp = await session.customRequest('threads');
+      } catch {
+        return;
+      }
+
+      const rawThreads: Array<{ id: number; name: string }> = threadResp?.threads ?? [];
+      if (!rawThreads.length) return;
+
+      // Capture frames for all threads
+      for (const t of rawThreads) {
+        try {
+          const stackResp = await session.customRequest('stackTrace', {
+            threadId: t.id,
+            startFrame: 0,
+            levels: 25
+          });
+          if (stackResp?.stackFrames && Array.isArray(stackResp.stackFrames)) {
+            const frames: CviStackFrameInfo[] = stackResp.stackFrames.map((sf: any) => ({
+              id: sf.id,
+              name: sf.name || '<unknown>',
+              file: sf.source?.path || sf.source?.name,
+              line: sf.line,
+              column: sf.column
+            }));
+
+            const targetThread = this.currentProcessInfo.threads.find(
+              (th) => th.id === t.id || (th.osThreadId && t.name.includes(String(th.osThreadId)))
+            );
+
+            if (targetThread) {
+              targetThread.frames = frames;
+              targetThread.topFrame = frames[0];
+            }
           }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Always fire on stop so user can inspect fresh frames in sidebar
+      this._onDidChangeThreads.fire();
+
+      // Priority order to find user source code frame:
+      // 1. stopped thread
+      // 2. thread 1 (Main GUI thread)
+      // 3. all other threads
+      const candidateThreadIds: number[] = [];
+      if (stoppedThreadId) candidateThreadIds.push(stoppedThreadId);
+      if (!candidateThreadIds.includes(1)) candidateThreadIds.push(1);
+      for (const t of rawThreads) {
+        if (!candidateThreadIds.includes(t.id)) candidateThreadIds.push(t.id);
+      }
+
+      for (const tid of candidateThreadIds) {
+        try {
+          const stackResp = await session.customRequest('stackTrace', {
+            threadId: tid,
+            startFrame: 0,
+            levels: 30
+          });
+          const frames = stackResp?.stackFrames || [];
+          for (const frame of frames) {
+            const rawFile = frame.source?.path || frame.source?.name;
+            if (!rawFile) continue;
+
+            const resolvedFile = this.resolveSourceFilePath(rawFile);
+            if (resolvedFile && typeof frame.line === 'number') {
+              const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedFile));
+              const line = Math.max(0, frame.line - 1);
+              const col = Math.max(0, (frame.column || 1) - 1);
+              await vscode.window.showTextDocument(doc, {
+                selection: new vscode.Range(line, col, line, col),
+                preserveFocus: false
+              });
+              return;
+            }
+          }
+        } catch {
+          // ignore
         }
       }
     } catch {
-      // Ignore navigation errors
+      // ignore
     }
+  }
+
+  private resolveSourceFilePath(rawFile: string): string | null {
+    if (!rawFile) return null;
+
+    try {
+      if (fs.existsSync(rawFile)) return rawFile;
+    } catch {}
+
+    const normalized = path.normalize(rawFile);
+    try {
+      if (fs.existsSync(normalized)) return normalized;
+    } catch {}
+
+    const basename = path.basename(rawFile);
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+    for (const folder of workspaceFolders) {
+      const p1 = path.join(folder.uri.fsPath, rawFile);
+      if (fs.existsSync(p1)) return p1;
+
+      const p2 = path.join(folder.uri.fsPath, basename);
+      if (fs.existsSync(p2)) return p2;
+
+      const found = this.findFileRecursive(folder.uri.fsPath, basename, 3);
+      if (found) return found;
+    }
+
+    return null;
+  }
+
+  private findFileRecursive(dir: string, targetBaseName: string, maxDepth: number): string | null {
+    if (maxDepth < 0) return null;
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isFile() && entry.name.toLowerCase() === targetBaseName.toLowerCase()) {
+          return fullPath;
+        } else if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+          const res = this.findFileRecursive(fullPath, targetBaseName, maxDepth - 1);
+          if (res) return res;
+        }
+      }
+    } catch {}
+    return null;
   }
 
   private async captureDapStackFrames(): Promise<void> {
@@ -404,13 +517,13 @@ export class CviThreadTrackerService implements vscode.Disposable {
             }
           }
         } catch {
-          // Thread might have resumed
+          // ignore
         }
       }
 
       this._onDidChangeThreads.fire();
     } catch {
-      // Ignore
+      // ignore
     }
   }
 
@@ -424,6 +537,8 @@ export class CviThreadTrackerService implements vscode.Disposable {
     try {
       this.helperProcess.stdin.write(`suspend ${osTid}\n`);
       vscode.window.showInformationMessage(`Suspended thread #${th?.id ?? ''} (TID ${osTid})`);
+      if (th) th.state = 'Suspended';
+      this._onDidChangeThreads.fire();
       return true;
     } catch (err) {
       vscode.window.showErrorMessage(`Failed to suspend thread: ${err}`);
@@ -441,6 +556,8 @@ export class CviThreadTrackerService implements vscode.Disposable {
     try {
       this.helperProcess.stdin.write(`resume ${osTid}\n`);
       vscode.window.showInformationMessage(`Resumed thread #${th?.id ?? ''} (TID ${osTid})`);
+      if (th) th.state = 'Running';
+      this._onDidChangeThreads.fire();
       return true;
     } catch (err) {
       vscode.window.showErrorMessage(`Failed to resume thread: ${err}`);

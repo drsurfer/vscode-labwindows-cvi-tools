@@ -21,7 +21,7 @@ export class CviCpuStripchartPanel {
 
     const panel = vscode.window.createWebviewPanel(
       CviCpuStripchartPanel.viewType,
-      'Process Threads',
+      'Process Threads [Experimental]',
       column || vscode.ViewColumn.One,
       {
         enableScripts: true,
@@ -44,6 +44,9 @@ export class CviCpuStripchartPanel {
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
     this._panel.webview.onDidReceiveMessage((msg) => {
       if (msg?.type === 'ready') {
+        const isInactive = !this.tracker.isSessionActive;
+        this.setSessionActive(!isInactive);
+
         const info = this.tracker.processInfo;
         if (info) {
           this.updateData({
@@ -60,11 +63,12 @@ export class CviCpuStripchartPanel {
         void this.tracker.resumeThread(msg.tid);
       }
     }, null, this._disposables);
-    this._panel.webview.html = this._getHtmlForWebview();
+
+    this._panel.webview.html = this._getHtmlForWebview(!this.tracker.isSessionActive);
 
     // Initial update if process info is already present
     const info = this.tracker.processInfo;
-    if (info) {
+    if (info && this.tracker.isSessionActive) {
       this.updateData({
         processName: info.processName || 'CVI Process',
         processId: info.processId,
@@ -73,6 +77,16 @@ export class CviCpuStripchartPanel {
         threads: info.threads
       });
     }
+  }
+
+  public setSessionActive(active: boolean): void {
+    if (!this._panel.visible) {
+      return;
+    }
+    void this._panel.webview.postMessage({
+      type: 'sessionState',
+      active
+    });
   }
 
   public updateData(payload: {
@@ -102,13 +116,14 @@ export class CviCpuStripchartPanel {
     }
   }
 
-  private _getHtmlForWebview(): string {
+  private _getHtmlForWebview(initialInactive: boolean): string {
+    const bodyClass = initialInactive ? 'session-inactive' : '';
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Process Threads</title>
+  <title>Process Threads [Experimental]</title>
   <style>
     :root {
       --bg: var(--vscode-editor-background, #1e1e1e);
@@ -127,6 +142,36 @@ export class CviCpuStripchartPanel {
       margin: 0;
       padding: 16px;
       user-select: none;
+      transition: opacity 0.2s ease;
+    }
+    body.session-inactive {
+      opacity: 0.72;
+    }
+    body.session-inactive .metric-val {
+      color: var(--vscode-disabledForeground, #777777) !important;
+    }
+    body.session-inactive .action-btn {
+      pointer-events: none;
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+    body.session-inactive #stripchartCanvas {
+      filter: grayscale(70%) opacity(60%);
+    }
+    .inactive-banner {
+      display: none;
+      background: rgba(128, 128, 128, 0.1);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 8px 14px;
+      margin-bottom: 14px;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground, #a0a0a0);
+    }
+    body.session-inactive .inactive-banner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
     .header {
       display: flex;
@@ -285,24 +330,28 @@ export class CviCpuStripchartPanel {
     }
   </style>
 </head>
-<body>
+<body class="${bodyClass}">
+  <div id="inactiveBanner" class="inactive-banner">
+    <span>⚪ No active CVI debugging session. Process telemetry and controls are disabled until debugging starts.</span>
+  </div>
+
   <div class="header">
     <div class="title-group">
-      <h1 id="procTitle">LabWindows/CVI Diagnostics</h1>
-      <span id="procPid" class="pill">PID: Waiting</span>
+      <h1 id="procTitle">Process Threads [Experimental]</h1>
+      <span id="procPid" class="pill">${initialInactive ? 'PID: Offline' : 'PID: Waiting'}</span>
     </div>
     <div class="metrics">
       <div class="metric-card">
         <div class="metric-label">Current CPU</div>
-        <div id="valCurrent" class="metric-val" style="color:var(--accent);">0.0%</div>
+        <div id="valCurrent" class="metric-val" style="color:var(--accent);">${initialInactive ? '--' : '0.0%'}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Peak CPU</div>
-        <div id="valPeak" class="metric-val">0.0%</div>
+        <div id="valPeak" class="metric-val">${initialInactive ? '--' : '0.0%'}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Average (60s)</div>
-        <div id="valAvg" class="metric-val">0.0%</div>
+        <div id="valAvg" class="metric-val">${initialInactive ? '--' : '0.0%'}</div>
       </div>
     </div>
   </div>
@@ -317,7 +366,7 @@ export class CviCpuStripchartPanel {
   <div class="table-container">
     <div class="table-header">
       <span>Active Process Threads</span>
-      <span id="threadCountBadge" class="pill">0 Threads</span>
+      <span id="threadCountBadge" class="pill">${initialInactive ? 'Offline' : '0 Threads'}</span>
     </div>
     <table id="threadsTable">
       <thead>
@@ -336,7 +385,7 @@ export class CviCpuStripchartPanel {
       </thead>
       <tbody id="threadsBody">
         <tr>
-          <td colspan="10" class="empty-msg">Waiting for CVI debug session telemetry…</td>
+          <td colspan="10" class="empty-msg">${initialInactive ? 'No active CVI debugging session. Threads and telemetry appear during debug.' : 'Waiting for CVI debug session telemetry…'}</td>
         </tr>
       </tbody>
     </table>
@@ -359,6 +408,22 @@ export class CviCpuStripchartPanel {
     let currentSortCol = 'id';
     let currentSortAsc = true;
     let latestThreads = [];
+    let isInactive = ${initialInactive ? 'true' : 'false'};
+
+    function setInactiveState(inactive) {
+      isInactive = inactive;
+      document.body.classList.toggle('session-inactive', inactive);
+      if (inactive) {
+        procPid.textContent = 'PID: Offline';
+        valCurrent.textContent = '--';
+        valPeak.textContent = '--';
+        valAvg.textContent = '--';
+        threadCountBadge.textContent = 'Offline';
+        threadsBody.innerHTML = '<tr><td colspan="10" class="empty-msg">No active CVI debugging session. Threads and telemetry appear during debug.</td></tr>';
+        historyData = [];
+        drawStripchart();
+      }
+    }
 
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
@@ -389,15 +454,12 @@ export class CviCpuStripchartPanel {
       const plotWidth = width - paddingLeft - paddingRight;
       const plotHeight = height - paddingTop - paddingBottom;
 
-      // Autoscale Y with Fixed Zero:
-      // Minimum Y is ALWAYS 0.
       let maxVal = 10;
       if (historyData.length > 0) {
         const peak = Math.max(...historyData.map(d => d.cpuPercent || 0));
         maxVal = Math.max(10, Math.ceil(peak * 1.25 / 10) * 10);
       }
 
-      // Draw Grid Lines & Y Axis Labels
       ctx.font = '10px monospace';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
@@ -417,7 +479,6 @@ export class CviCpuStripchartPanel {
         ctx.fillText(\`\${Math.round(val)}%\`, paddingLeft - 6, y);
       }
 
-      // Draw X Axis Time Labels (-60s to 0s)
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       const timeTicks = [
@@ -439,10 +500,17 @@ export class CviCpuStripchartPanel {
         ctx.fillText(t.label, x, paddingTop + plotHeight + 6);
       }
 
-      // If no data, return
+      if (isInactive) {
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = 'rgba(160, 160, 160, 0.5)';
+        ctx.fillText('Debugging session inactive — Waiting for process telemetry...', paddingLeft + plotWidth / 2, paddingTop + plotHeight / 2);
+        return;
+      }
+
       if (historyData.length === 0) return;
 
-      // Plot data points
       const maxSamples = 60;
       const count = historyData.length;
       const points = [];
@@ -455,7 +523,6 @@ export class CviCpuStripchartPanel {
         points.push({ x, y });
       }
 
-      // Gradient area under curve
       const gradient = ctx.createLinearGradient(0, paddingTop, 0, paddingTop + plotHeight);
       gradient.addColorStop(0, 'rgba(0, 122, 204, 0.4)');
       gradient.addColorStop(1, 'rgba(0, 122, 204, 0.02)');
@@ -470,7 +537,6 @@ export class CviCpuStripchartPanel {
       ctx.fillStyle = gradient;
       ctx.fill();
 
-      // Stroke line
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
       for (let i = 1; i < points.length; i++) {
@@ -480,7 +546,6 @@ export class CviCpuStripchartPanel {
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Draw current live point dot
       const last = points[points.length - 1];
       ctx.fillStyle = '#007acc';
       ctx.beginPath();
@@ -509,7 +574,7 @@ export class CviCpuStripchartPanel {
             'highest': 5,
             'timecritical': 6
           };
-          const p = String(t.priority || 'Normal').toLowerCase().replace(/[\s_-]+/g, '');
+          const p = String(t.priority || 'Normal').toLowerCase().replace(/[\\s_-]+/g, '');
           return prioOrder[p] !== undefined ? prioOrder[p] : 3;
         }
         case 'cpuMs': return Number(t.cpuMs) || 0;
@@ -620,10 +685,15 @@ export class CviCpuStripchartPanel {
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
-      if (msg?.type === 'telemetry' && msg.data) {
+      if (msg?.type === 'sessionState') {
+        setInactiveState(!msg.active);
+      } else if (msg?.type === 'telemetry' && msg.data) {
+        if (isInactive) {
+          setInactiveState(false);
+        }
         const d = msg.data;
         if (d.processName) {
-          procTitle.textContent = \`\${d.processName}\`;
+          procTitle.textContent = \`\${d.processName} · Process Threads [Experimental]\`;
         }
         if (d.processId) {
           procPid.textContent = \`PID: \${d.processId}\`;
