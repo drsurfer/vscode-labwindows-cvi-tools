@@ -2,6 +2,57 @@
 
 All notable changes to the "LabWindows/CVI Tools" extension will be documented in this file.
 
+## [0.0.23] - 2026-11-12
+
+### Fixed
+- **Process Threads Sidebar Tooltip Persistence**:
+  - Eliminated the issue where hover tooltips in the sidebar "Process Threads" view would immediately vanish during 1 Hz telemetry updates.
+  - Frozen tree updates during continuous 1 Hz running ticks, firing tree change notifications only on actual structural alterations (thread creation/termination or suspend/resume state changes).
+- **Automatic Source Code Navigation on Debugger Pause**:
+  - Resolved the problem where pressing the debugger Pause button failed to open or highlight the user's source code (due to Windows stopping on non-source OS frames such as `ntdll!DbgBreakPoint` or `user32!GetMessage`).
+  - Added intelligent stack frame analysis (`navigateAndCaptureOnStop`) that inspects the stopped thread and Thread 1 (Main GUI thread) to locate the top-most frame with user CVI source code (`.c`/`.h`) and automatically opens the file and highlights the line in the editor.
+
+### Changed
+- **Process Threads Diagnostics Disabled/Inactive Styling**:
+  - Added dynamic `.session-inactive` styling to the "Process Threads" webview when no active CVI debugging session is running.
+  - Displays an inactive banner notice, disabled action buttons, offline status badges, and an explicit watermark on the CPU stripchart canvas until a debug session starts.
+- **Nomenclature Update**:
+  - Renamed the sidebar view and diagnostics panel to **"Process Threads [Experimental]"** to clearly indicate preview functionality.
+
+## [0.0.22] - 2026-11-12
+
+### Added
+- **Ultra-Lightweight Native Process Telemetry Helper (`cvi_telemetry.exe`)**:
+  - Replaced high-overhead PowerShell/WMI polling with a dedicated native C binary (`bin/cvi_telemetry.exe`) using Windows NT Native APIs (`NtQuerySystemInformation(SystemProcessInformation)` and `GetSystemTimes`).
+  - Reduced CPU consumption to virtually zero (<0.1% CPU usage at 1 Hz), eliminating all system slowdowns during telemetry sampling.
+  - Added command-line configurable sampling intervals and interactive `stdin` commands for thread suspension and resumption (`suspend <tid>`, `resume <tid>`).
+- **Real-Time CPU Stripchart & Thread Diagnostics Webview**:
+  - Integrated high-performance HTML5 canvas stripchart with dynamic Y-axis autoscaling (with fixed zero) and scrolling 60-second time window.
+  - Added comprehensive thread tabular diagnostic metrics: Thread ID (TID), Name/Role, Kernel State (`Running`, `Wait`, `Suspended`), Wait Reason (`UserRequest`, `WrQueue`, `DelayExecution`, etc.), Base Priority, and exact CPU execution times.
+  - Added multi-column sorting (TID, Name, Status, Priority, CPU Time) and customizable column visibility.
+
+### Removed
+- **Textual Sparkline Glyphs**:
+  - Removed decorative textual sparkline glyphs from thread headers to streamline the UI and avoid unnecessary rendering overhead.
+
+## [0.0.21] - 2026-11-11
+
+### Removed
+- **Empty Debug Memory Container**:
+  - Removed the unused and empty "Memory" tree container from the Run & Debug viewlet.
+
+### Fixed
+- **Resource Tracking Service Stability**:
+  - Enhanced error handling and recovery in `CviResourceTrackingService` to prevent unhandled rejection during debugger attach/detach cycles.
+
+## [0.0.20] - 2026-11-10
+
+### Fixed
+- **Debugger Crash / Silent Exit on Multiple Breakpoint Hits**:
+  - Fixed a critical heap corruption bug where the debugged target would silently crash or terminate after hitting the same breakpoint 3 or 4 times.
+  - Identified root cause: synchronous GDB expression calls (`-exec call (int)__CVI_Resource_DumpToFile($cvi_buf)`) while another thread hit a breakpoint caused GDB to abandon function evaluation, corrupting the inferior process's heap and runtime state.
+  - Decoupled resource inspection from synchronous breakpoint stop hooks, ensuring uninterrupted multithreaded debugging stability.
+
 ## [0.0.19] - 2026-11-10
 
 ### Consolidated
