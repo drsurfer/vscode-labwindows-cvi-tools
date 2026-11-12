@@ -849,6 +849,11 @@ export class CviBuildService {
           ignoreFailures: true
         },
         {
+          description: 'Keep breakpoints always inserted',
+          text: 'set breakpoint always-inserted on',
+          ignoreFailures: true
+        },
+        {
           description: 'Install silent exit resource trap',
           text: `source ${trapScriptPath}`,
           ignoreFailures: true

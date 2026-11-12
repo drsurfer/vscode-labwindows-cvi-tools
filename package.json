@@ -2,7 +2,7 @@
   "name": "labwindows-cvi-tools",
   "displayName": "LabWindows/CVI Tools",
   "description": "Manage LabWindows/CVI workspaces and projects directly from Visual Studio Code.",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "publisher": "drsurfer",
   "license": "MIT",
   "engines": {
@@ -798,6 +798,18 @@
         "category": "LabWindows/CVI"
       },
       {
+        "command": "labwindowsCvi.suspendThread",
+        "title": "Suspend Thread",
+        "icon": "$(debug-pause)",
+        "category": "LabWindows/CVI"
+      },
+      {
+        "command": "labwindowsCvi.resumeThread",
+        "title": "Resume Thread",
+        "icon": "$(play)",
+        "category": "LabWindows/CVI"
+      },
+      {
         "command": "labwindowsCvi.openRecent",
         "title": "LabWindows/CVI: Open Recent Workspace or Project...",
         "icon": "$(history)"
@@ -1067,6 +1079,26 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "labwindowsCvi.suspendThread",
+          "when": "view == labwindowsCvi.processThreads && viewItem == cviThreadItem_running",
+          "group": "inline@1"
+        },
+        {
+          "command": "labwindowsCvi.resumeThread",
+          "when": "view == labwindowsCvi.processThreads && viewItem == cviThreadItem_suspended",
+          "group": "inline@1"
+        },
+        {
+          "command": "labwindowsCvi.suspendThread",
+          "when": "view == labwindowsCvi.processThreads && viewItem == cviThreadItem_running",
+          "group": "control@1"
+        },
+        {
+          "command": "labwindowsCvi.resumeThread",
+          "when": "view == labwindowsCvi.processThreads && viewItem == cviThreadItem_suspended",
+          "group": "control@1"
+        },
         {
           "command": "labwindowsCvi.openWorkspaceInCvi",
           "when": "view == labwindowsCvi.workspaceExplorer && viewItem == cviWorkspace",

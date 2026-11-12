@@ -498,6 +498,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     register('labwindowsCvi.refreshProcessThreads', () => threadTreeProvider.refresh()),
     register('labwindowsCvi.openCpuStripchart', () => CviCpuStripchartPanel.createOrShow(context.extensionUri, threadTracker)),
     register('labwindowsCvi.pauseAllThreads', () => threadTracker.pauseAllThreads()),
+    register('labwindowsCvi.suspendThread', async (item?: any) => {
+      const tid = item?.thread?.osThreadId ?? item?.thread?.id ?? item?.osThreadId ?? item?.id ?? item;
+      if (typeof tid === 'number') {
+        await threadTracker.suspendThread(tid);
+        threadTreeProvider.refresh();
+      }
+    }),
+    register('labwindowsCvi.resumeThread', async (item?: any) => {
+      const tid = item?.thread?.osThreadId ?? item?.thread?.id ?? item?.osThreadId ?? item?.id ?? item;
+      if (typeof tid === 'number') {
+        await threadTracker.resumeThread(tid);
+        threadTreeProvider.refresh();
+      }
+    }),
     register('labwindowsCvi.openResourceLocation', async (arg?: { file?: string; line?: number }) => {
       if (!arg?.file) return;
       try {

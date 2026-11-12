@@ -54,6 +54,10 @@ export class CviCpuStripchartPanel {
             threads: info.threads
           });
         }
+      } else if (msg?.command === 'suspendThread' && typeof msg.tid === 'number') {
+        void this.tracker.suspendThread(msg.tid);
+      } else if (msg?.command === 'resumeThread' && typeof msg.tid === 'number') {
+        void this.tracker.resumeThread(msg.tid);
       }
     }, null, this._disposables);
     this._panel.webview.html = this._getHtmlForWebview();
@@ -255,6 +259,24 @@ export class CviCpuStripchartPanel {
     .badge-running { background: rgba(78, 201, 176, 0.2); color: var(--green); }
     .badge-wait { background: rgba(204, 167, 0, 0.2); color: var(--amber); }
     .badge-suspended { background: rgba(241, 76, 76, 0.2); color: var(--red); }
+    .action-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--fg);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .action-btn:hover {
+      background: rgba(128, 128, 128, 0.2);
+    }
+    .pause-btn { color: var(--amber); border-color: rgba(204, 167, 0, 0.4); }
+    .pause-btn:hover { background: rgba(204, 167, 0, 0.15); }
+    .resume-btn { color: var(--green); border-color: rgba(78, 201, 176, 0.4); }
+    .resume-btn:hover { background: rgba(78, 201, 176, 0.15); }
     .mono { font-family: var(--vscode-editor-font-family, monospace); }
     .empty-msg {
       padding: 24px;
@@ -309,11 +331,12 @@ export class CviCpuStripchartPanel {
           <th class="sortable" data-col="priority">Priority <span class="sort-icon" id="sort-priority"></span></th>
           <th class="sortable" data-col="cpuMs">CPU Time <span class="sort-icon" id="sort-cpuMs"></span></th>
           <th class="sortable" data-col="location">Location <span class="sort-icon" id="sort-location"></span></th>
+          <th>Control</th>
         </tr>
       </thead>
       <tbody id="threadsBody">
         <tr>
-          <td colspan="9" class="empty-msg">Waiting for CVI debug session telemetry…</td>
+          <td colspan="10" class="empty-msg">Waiting for CVI debug session telemetry…</td>
         </tr>
       </tbody>
     </table>
@@ -470,18 +493,26 @@ export class CviCpuStripchartPanel {
 
     function getThreadVal(t, col) {
       switch (col) {
-        case 'id': return t.id ?? 0;
-        case 'osThreadId': return t.osThreadId ? parseInt(t.osThreadId, 10) || 0 : 0;
+        case 'id': return Number(t.id) || 0;
+        case 'osThreadId': return Number(t.osThreadId) || 0;
         case 'name': return (t.role === 'main' ? 'Main GUI Thread' : (t.name || 'Thread')).toLowerCase();
         case 'entryPoint': return (t.entryPoint || '').toLowerCase();
         case 'state': return (t.state || 'Running').toLowerCase();
         case 'waitReason': return (t.waitReason || '').toLowerCase();
         case 'priority': {
-          const prioOrder = { 'idle': 0, 'lowest': 1, 'below normal': 2, 'normal': 3, 'above normal': 4, 'highest': 5, 'time critical': 6 };
-          const p = (t.priority || 'Normal').toLowerCase();
+          const prioOrder = {
+            'idle': 0,
+            'lowest': 1,
+            'belownormal': 2,
+            'normal': 3,
+            'abovenormal': 4,
+            'highest': 5,
+            'timecritical': 6
+          };
+          const p = String(t.priority || 'Normal').toLowerCase().replace(/[\s_-]+/g, '');
           return prioOrder[p] !== undefined ? prioOrder[p] : 3;
         }
-        case 'cpuMs': return t.cpuMs !== undefined ? t.cpuMs : -1;
+        case 'cpuMs': return Number(t.cpuMs) || 0;
         case 'location': {
           return t.topFrame ? (t.topFrame.name || '').toLowerCase() : '';
         }
@@ -497,7 +528,7 @@ export class CviCpuStripchartPanel {
         const valB = getThreadVal(b, currentSortCol);
         if (valA < valB) return currentSortAsc ? -1 : 1;
         if (valA > valB) return currentSortAsc ? 1 : -1;
-        return (a.id || 0) - (b.id || 0);
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
       });
       return list;
     }
@@ -526,10 +557,18 @@ export class CviCpuStripchartPanel {
       });
     });
 
+    function suspendThread(tid) {
+      vscodeApi.postMessage({ command: 'suspendThread', tid });
+    }
+
+    function resumeThread(tid) {
+      vscodeApi.postMessage({ command: 'resumeThread', tid });
+    }
+
     function renderThreads(threads) {
       latestThreads = threads || [];
       if (!latestThreads || latestThreads.length === 0) {
-        threadsBody.innerHTML = '<tr><td colspan="9" class="empty-msg">No active threads detected.</td></tr>';
+        threadsBody.innerHTML = '<tr><td colspan="10" class="empty-msg">No active threads detected.</td></tr>';
         threadCountBadge.textContent = '0 Threads';
         return;
       }
@@ -539,10 +578,24 @@ export class CviCpuStripchartPanel {
       let html = '';
 
       for (const t of sorted) {
-        const stateClass = t.state === 'Running' ? 'badge-running' : (t.state === 'Wait' ? 'badge-wait' : 'badge-suspended');
-        const loc = t.topFrame ? \`\${t.topFrame.name} (\${t.topFrame.file ? t.topFrame.file.split(/[\\\\/]/).pop() : 'unknown'}:\${t.topFrame.line || 0})\` : (t.status || 'Running');
+        let stateClass = 'badge-wait';
+        if (t.state === 'Running' || t.state === 'Ready') {
+          stateClass = 'badge-running';
+        } else if (t.state === 'Suspended') {
+          stateClass = 'badge-suspended';
+        }
+
+        const loc = t.topFrame
+          ? \`\${t.topFrame.name} (\${t.topFrame.file ? t.topFrame.file.split(/[\\\\/]/).pop() : 'unknown'}:\${t.topFrame.line || 0})\`
+          : '-';
         const entry = t.entryPoint || '-';
-        const nameText = t.role === 'main' ? 'Main GUI Thread' : (t.name || 'Thread');
+        const nameText = t.role === 'main' ? 'Main GUI Thread' : (t.name || \`Thread #\${t.id}\`);
+        const reasonText = (t.waitReason && t.waitReason !== '-') ? t.waitReason : (t.state === 'Running' ? '-' : 'Wait');
+
+        const btnClass = t.state === 'Suspended' ? 'action-btn resume-btn' : 'action-btn pause-btn';
+        const btnText = t.state === 'Suspended' ? '▶ Resume' : '⏸ Suspend';
+        const btnAction = t.state === 'Suspended' ? 'resumeThread' : 'suspendThread';
+        const tidVal = t.osThreadId || t.id;
 
         html += \`<tr>
           <td>#\${t.id}</td>
@@ -550,10 +603,11 @@ export class CviCpuStripchartPanel {
           <td><strong>\${escapeHtml(nameText)}</strong></td>
           <td class="mono" title="\${escapeHtml(entry)}">\${escapeHtml(entry)}</td>
           <td><span class="badge \${stateClass}">\${escapeHtml(t.state || 'Running')}</span></td>
-          <td>\${escapeHtml(t.waitReason || '-')}</td>
+          <td>\${escapeHtml(reasonText)}</td>
           <td>\${escapeHtml(t.priority || 'Normal')}</td>
           <td class="mono">\${t.cpuMs !== undefined ? t.cpuMs.toFixed(1) + ' ms' : '-'}</td>
           <td title="\${escapeHtml(loc)}">\${escapeHtml(loc)}</td>
+          <td><button class="\${btnClass}" onclick="\${btnAction}(\${tidVal})">\${btnText}</button></td>
         </tr>\`;
       }
 

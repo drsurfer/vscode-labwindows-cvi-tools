@@ -47,23 +47,18 @@ export class ThreadTreeItem extends vscode.TreeItem {
 
     this.tooltip = `Thread #${thread.id} (TID ${thread.osThreadId || '-'})\nName: ${thread.name}${mainSuffix}\nState: ${stateDesc}${waitDesc}${prioDesc}${cpuDesc}${entryDesc}${frameDesc}\nFrames captured: ${thread.frames.length}`;
 
-    switch (thread.role) {
-      case 'main':
-        this.iconPath = new vscode.ThemeIcon('window');
-        break;
-      case 'pool':
-        this.iconPath = new vscode.ThemeIcon('server-process');
-        break;
-      case 'runtime':
-        this.iconPath = new vscode.ThemeIcon('shield');
-        break;
-      case 'worker':
-      default:
-        this.iconPath = new vscode.ThemeIcon('symbol-event');
-        break;
+    if (thread.role === 'main') {
+      this.iconPath = new vscode.ThemeIcon('window');
+    } else if (thread.state === 'Suspended') {
+      this.iconPath = new vscode.ThemeIcon('debug-pause', new vscode.ThemeColor('charts.red'));
+    } else if (thread.state === 'Running') {
+      this.iconPath = new vscode.ThemeIcon('play', new vscode.ThemeColor('testing.iconPassed'));
+    } else {
+      // Waiting
+      this.iconPath = new vscode.ThemeIcon('debug-stackframe-dot');
     }
 
-    this.contextValue = `cviThreadItem_${thread.role}`;
+    this.contextValue = thread.state === 'Suspended' ? 'cviThreadItem_suspended' : 'cviThreadItem_running';
   }
 }
 

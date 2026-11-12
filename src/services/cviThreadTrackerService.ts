@@ -141,7 +141,6 @@ export class CviThreadTrackerService implements vscode.Disposable {
         return {
           onDidSendMessage: (message: any) => {
             if (message.type === 'response' && message.command === 'initialize') {
-              // Hide VS Code's empty built-in "Memory" view in the Debug sidebar
               if (message.body) {
                 message.body.supportsReadMemoryRequest = false;
                 message.body.supportsWriteMemoryRequest = false;
@@ -158,10 +157,18 @@ export class CviThreadTrackerService implements vscode.Disposable {
                     this.startNativeTelemetry();
                   }
                 }
-              } else if (
-                message.event === 'stopped' ||
-                message.event === 'thread'
-              ) {
+              } else if (message.event === 'stopped') {
+                // Intercept pause / exception "Signal 0"
+                if (message.body && message.body.reason === 'exception') {
+                  const desc = String(message.body.description || message.body.text || '');
+                  if (desc.includes('Signal 0') || desc.includes('SIGINT') || desc.includes('Interrupt') || desc.includes('0x0')) {
+                    message.body.reason = 'pause';
+                    message.body.description = 'Paused by user';
+                    delete message.body.text;
+                  }
+                }
+                void this.onTargetStopped(message.body?.threadId);
+              } else if (message.event === 'continued' || message.event === 'thread') {
                 void this.captureDapStackFrames();
               }
             }
@@ -197,7 +204,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
 
     try {
       this.helperProcess = cp.spawn(helperPath, [target, String(interval)], {
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['pipe', 'pipe', 'ignore'],
         windowsHide: true
       });
 
@@ -213,7 +220,9 @@ export class CviThreadTrackerService implements vscode.Disposable {
           if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
             try {
               const data = JSON.parse(trimmed);
-              this.onTelemetryData(data);
+              if (data.threads) {
+                this.onTelemetryData(data);
+              }
             } catch {}
           }
         }
@@ -245,7 +254,7 @@ export class CviThreadTrackerService implements vscode.Disposable {
     pid: number;
     cpuPercent: number;
     cpuMs: number;
-    threads: Array<{ id: number; priority: string; cpuMs: number; entryPoint: string; module?: string }>;
+    threads: Array<{ id: number; state: string; waitReason: string; priority: string; cpuMs: number; entryPoint: string; module?: string }>;
   }): void {
     if (!this.currentProcessInfo || !this.activeSession) return;
 
@@ -272,9 +281,11 @@ export class CviThreadTrackerService implements vscode.Disposable {
       const isCviRuntime = ost.module && /cvirte/i.test(ost.module);
       const role: CviThreadRole = match?.role ?? (isMain ? 'main' : (isCviRuntime ? 'runtime' : 'worker'));
       const roleLabel: string = match?.roleLabel ?? (isMain ? 'Main GUI Thread' : (isCviRuntime ? 'CVI Runtime' : 'Worker Thread'));
+
+      // If cannot give meaningful name, use Thread #ID instead of duplicating entry point
       const name: string = isMain
         ? 'Main GUI Thread'
-        : (ost.entryPoint && ost.entryPoint !== '-' ? ost.entryPoint : (ost.module ? `${ost.module} Thread` : `Thread #${ost.id}`));
+        : `Thread #${match?.id ?? (i + 1)}`;
 
       updatedThreads.push({
         id: match?.id ?? (i + 1),
@@ -282,8 +293,9 @@ export class CviThreadTrackerService implements vscode.Disposable {
         name,
         role,
         roleLabel,
-        status: 'Active',
-        state: 'Active',
+        status: ost.state || 'Running',
+        state: ost.state || 'Running',
+        waitReason: ost.waitReason || '-',
         priority: ost.priority || 'Normal',
         cpuMs: ost.cpuMs,
         entryPoint: ost.entryPoint,
@@ -293,10 +305,21 @@ export class CviThreadTrackerService implements vscode.Disposable {
       });
     }
 
+    // Only fire _onDidChangeThreads when there is a structural change or thread state change.
+    // This prevents destroying sidebar tree items at 1 Hz so user hover tooltips remain open!
+    const hasStructuralChange =
+      existing.length !== updatedThreads.length ||
+      updatedThreads.some((ut, idx) => {
+        const et = existing[idx];
+        return !et || et.id !== ut.id || et.osThreadId !== ut.osThreadId || et.state !== ut.state || et.waitReason !== ut.waitReason;
+      });
+
     this.currentProcessInfo.threads = updatedThreads;
     this.currentProcessInfo.updatedAt = new Date();
 
-    this._onDidChangeThreads.fire();
+    if (hasStructuralChange) {
+      this._onDidChangeThreads.fire();
+    }
 
     if (CviCpuStripchartPanel.currentPanel) {
       CviCpuStripchartPanel.currentPanel.updateData({
@@ -306,6 +329,37 @@ export class CviThreadTrackerService implements vscode.Disposable {
         cpuHistory: this.currentProcessInfo.cpuHistory,
         threads: this.currentProcessInfo.threads
       });
+    }
+  }
+
+  private async onTargetStopped(threadId?: number): Promise<void> {
+    await this.captureDapStackFrames();
+
+    // Auto-navigate to highest user source frame if stopped inside Windows DLL
+    if (!this.activeSession || !this.currentProcessInfo) return;
+    try {
+      const targetThread = threadId
+        ? this.currentProcessInfo.threads.find(t => t.id === threadId || t.osThreadId === threadId)
+        : this.currentProcessInfo.threads[0];
+
+      if (targetThread && targetThread.frames.length > 0) {
+        const top = targetThread.frames[0];
+        const topHasSource = top.file && fs.existsSync(top.file);
+        if (!topHasSource) {
+          const userFrame = targetThread.frames.find(f => f.file && fs.existsSync(f.file));
+          if (userFrame && userFrame.file && typeof userFrame.line === 'number') {
+            const doc = await vscode.workspace.openTextDocument(userFrame.file);
+            const line = Math.max(0, userFrame.line - 1);
+            const col = Math.max(0, (userFrame.column || 1) - 1);
+            await vscode.window.showTextDocument(doc, {
+              selection: new vscode.Range(line, col, line, col),
+              preserveFocus: false
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore navigation errors
     }
   }
 
@@ -360,11 +414,46 @@ export class CviThreadTrackerService implements vscode.Disposable {
     }
   }
 
+  async suspendThread(threadIdOrTid: number): Promise<boolean> {
+    if (!this.helperProcess || !this.helperProcess.stdin) {
+      vscode.window.showErrorMessage('Telemetry helper is not running.');
+      return false;
+    }
+    const th = this.currentProcessInfo?.threads.find(t => t.id === threadIdOrTid || t.osThreadId === threadIdOrTid);
+    const osTid = th?.osThreadId || threadIdOrTid;
+    try {
+      this.helperProcess.stdin.write(`suspend ${osTid}\n`);
+      vscode.window.showInformationMessage(`Suspended thread #${th?.id ?? ''} (TID ${osTid})`);
+      return true;
+    } catch (err) {
+      vscode.window.showErrorMessage(`Failed to suspend thread: ${err}`);
+      return false;
+    }
+  }
+
+  async resumeThread(threadIdOrTid: number): Promise<boolean> {
+    if (!this.helperProcess || !this.helperProcess.stdin) {
+      vscode.window.showErrorMessage('Telemetry helper is not running.');
+      return false;
+    }
+    const th = this.currentProcessInfo?.threads.find(t => t.id === threadIdOrTid || t.osThreadId === threadIdOrTid);
+    const osTid = th?.osThreadId || threadIdOrTid;
+    try {
+      this.helperProcess.stdin.write(`resume ${osTid}\n`);
+      vscode.window.showInformationMessage(`Resumed thread #${th?.id ?? ''} (TID ${osTid})`);
+      return true;
+    } catch (err) {
+      vscode.window.showErrorMessage(`Failed to resume thread: ${err}`);
+      return false;
+    }
+  }
+
   async refresh(): Promise<void> {
     if (!this.helperProcess) {
       this.startNativeTelemetry();
     }
     await this.captureDapStackFrames();
+    this._onDidChangeThreads.fire();
   }
 
   async pauseAllThreads(): Promise<void> {
